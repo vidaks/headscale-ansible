@@ -1,0 +1,11 @@
+CLAUDE.md
+.vault_pass
+*.retry
+.venv/
+__pycache__/
+*.pyc
+
+# Environment-specific — never committed, matches plexarr convention.
+inventory.ini
+group_vars/**/*.yml
+host_vars/**/*.yml
