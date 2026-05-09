@@ -11,6 +11,14 @@ headscale_dns_magic_domain: ""
 headscale_host_ip: ""
 headscale_traefik_dynamic_dir: ""
 
+# Headscale username that owns operator-managed nodes (the user you create
+# with `headscale users create <name>` and then issue pre-auth keys for).
+# Used by ACL autoApprovers to allow this user's nodes to advertise exit
+# nodes / routes without manual approval. The trailing "@" is the
+# tailscale-policy-v2 syntax for "user, not group/tag" — the role builds it
+# from the bare name. Empty here; set the bare name in group_vars/all/vars.yml.
+headscale_admin_user: ""
+
 # Listen addresses.
 # Bind to 0.0.0.0 so Traefik can reach the container via the host IP.
 # Metrics on localhost only — not exposed publicly.

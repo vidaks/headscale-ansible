@@ -17,10 +17,10 @@
   // Avoids the manual `headscale routes enable` step every time a node
   // re-advertises after re-auth or upgrade.
   "autoApprovers": {
-    "exitNode": ["vidar@"],
+    "exitNode": ["{{ headscale_admin_user }}@"],
     "routes": {
-      "0.0.0.0/0": ["vidar@"],
-      "::/0":      ["vidar@"],
+      "0.0.0.0/0": ["{{ headscale_admin_user }}@"],
+      "::/0":      ["{{ headscale_admin_user }}@"],
     },
   },
 }

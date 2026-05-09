@@ -10,10 +10,13 @@
       - headscale_dns_magic_domain | length > 0
       - headscale_host_ip | length > 0
       - headscale_traefik_dynamic_dir | length > 0
+      - headscale_admin_user | length > 0
+      - headscale_admin_user is match('^[A-Za-z0-9_-]+$')
     fail_msg: >-
       One or more required variables are unset or invalid.
       Set headscale_server_url (must start with https://), headscale_domain,
-      headscale_dns_magic_domain, headscale_host_ip, and headscale_traefik_dynamic_dir
+      headscale_dns_magic_domain, headscale_host_ip, headscale_traefik_dynamic_dir,
+      and headscale_admin_user (alphanumeric/dash/underscore, no '@')
       in group_vars/all/vars.yml.
 
 - name: Preflight — assert Traefik dynamic config directory exists

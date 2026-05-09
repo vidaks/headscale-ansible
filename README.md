@@ -16,8 +16,8 @@ by the Headscale project.
 
 - **BSD-3-licensed.** No dual-license, no CLA, no commercial tier.
 - **Rootful Podman Quadlet.** Consistent with the existing server stack.
-- **Traefik integration.** Sits behind the existing reverse proxy; wildcard cert covers
-  any `*.example.com` subdomain automatically.
+- **Traefik integration.** Sits behind the existing reverse proxy; relies on the
+  proxy's wildcard certificate for any subdomain.
 - **gRPC-correct.** Traefik uses `h2c://` backend scheme for the TS2021 Noise protocol.
 - **No DNS side-effects.** MagicDNS disabled; `/etc/resolv.conf` verified unchanged.
 - **No routing side-effects.** Default route snapshotted and verified unchanged.
@@ -25,14 +25,21 @@ by the Headscale project.
 - **Public DERP.** Uses Tailscale's public DERP relay network (relay traffic is E2E
   WireGuard-encrypted; Tailscale Inc. cannot read it). Self-hosted DERP is an optional
   future supplement.
+- **Auto-approve exit-nodes.** Operator-owned nodes advertising `0.0.0.0/0` / `::/0`
+  / the exit-node flag are approved by ACL `autoApprovers` — no manual
+  `headscale nodes approve-routes`.
+- **Push tailnet DNS.** Pushed nameservers (`1.1.1.1` + `1.0.0.1` by default) reach
+  opt-in clients via `--accept-dns=true`, so they get a working resolver regardless of
+  the network they're on.
 - **Idempotent.** A clean second apply reports zero changes.
 - **Standalone verification.** `verify.yml` asserts posture at any time.
 
 ## Prerequisites
 
-1. The plexarr `reverse-proxy` role must have been deployed with Traefik in directory
-   provider mode (watches `dynamic/` instead of a single `dynamic.yml`).
-2. A DNS record for the headscale domain (e.g. `hs.example.com`) pointing to this server.
+1. Traefik configured in directory provider mode (watches `dynamic/` rather than a
+   single `dynamic.yml`).
+2. A DNS record for the headscale domain (e.g. `headscale.example.com`) pointing to
+   this server.
 
 ## Quick start
 
@@ -55,7 +62,7 @@ chmod 600 .vault_pass
 ```bash
 cat > inventory.ini <<'EOF'
 [headscale_nodes]
-tux ansible_connection=local ansible_host=127.0.0.1 ansible_python_interpreter=/usr/bin/python3
+<host> ansible_connection=local ansible_host=127.0.0.1 ansible_python_interpreter=/usr/bin/python3
 EOF
 ```
 
@@ -65,11 +72,12 @@ EOF
 mkdir -p group_vars/all
 cat > group_vars/all/vars.yml <<'EOF'
 ---
-headscale_server_url: "https://hs.example.com"
-headscale_domain: "hs.example.com"
+headscale_server_url: "https://headscale.example.com"
+headscale_domain: "headscale.example.com"
 headscale_dns_magic_domain: "ts.example.com"
 headscale_host_ip: "192.0.2.10"
-headscale_traefik_dynamic_dir: "/mnt/config/reverse-proxy/traefik/dynamic"
+headscale_traefik_dynamic_dir: "/path/to/traefik/dynamic"
+headscale_admin_user: "admin"
 EOF
 ```
 
@@ -91,24 +99,25 @@ ansible-playbook site.yml                    # must report changed=0
 
 ## Client onboarding
 
-Headscale manages its own auth keys — not Tailscale SaaS keys.
+Headscale manages its own auth keys — not Tailscale SaaS keys. Replace `<admin>` with
+the value of `headscale_admin_user` from your vars file.
 
 ```bash
-# Create a user
-sudo podman exec headscale headscale users create vidar
+# Create the user (one-time)
+sudo podman exec headscale headscale users create <admin>
 
 # Generate a pre-auth key (expires in 1 hour by default)
-sudo podman exec headscale headscale preauthkeys create --user vidar --expiration 1h
+sudo podman exec headscale headscale preauthkeys create --user <admin> --expiration 1h
 ```
 
-**macOS / Linux:**
+**macOS / Linux client:**
 ```bash
-sudo tailscale login --login-server https://hs.example.com --authkey <key>
+sudo tailscale login --login-server https://headscale.example.com --authkey <key>
 tailscale status
 ```
 
 **iOS / iPadOS (Tailscale app):**
-Settings → ALTERNATE COORDINATION SERVER URL → `https://hs.example.com`
+Settings → ALTERNATE COORDINATION SERVER URL → `https://headscale.example.com`
 Then tap "Sign in" and use the pre-auth key when prompted.
 
 ## Role variables
@@ -117,11 +126,12 @@ Then tap "Sign in" and use the pre-auth key when prompted.
 
 | Variable | Description |
 |---|---|
-| `headscale_server_url` | Public HTTPS URL of this headscale instance (e.g. `https://hs.example.com`) |
-| `headscale_domain` | Domain for Traefik routing rule (e.g. `hs.example.com`) |
-| `headscale_dns_magic_domain` | MagicDNS base domain for tailnet devices (e.g. `ts.example.com`) |
-| `headscale_host_ip` | Host IP that Traefik uses to reach the container (e.g. `192.0.2.10`) |
+| `headscale_server_url` | Public HTTPS URL of this headscale instance |
+| `headscale_domain` | Domain for the Traefik routing rule |
+| `headscale_dns_magic_domain` | MagicDNS base domain for tailnet devices |
+| `headscale_host_ip` | Host IP that Traefik uses to reach the container |
 | `headscale_traefik_dynamic_dir` | Path to Traefik's dynamic config directory on the host |
+| `headscale_admin_user` | Headscale username that owns operator-managed nodes; used by ACL auto-approvers and matched by the rekey scripts |
 
 ### Defaults (`roles/headscale/defaults/main.yml`)
 
@@ -136,6 +146,8 @@ Then tap "Sign in" and use the pre-auth key when prompted.
 | `headscale_log_level` | `warn` | Log verbosity |
 | `headscale_magic_dns` | `false` | MagicDNS disabled (preserves system DNS) |
 | `headscale_embedded_derp_enabled` | `false` | Use Tailscale public DERP relays |
+| `headscale_dns_global_nameservers` | `[1.1.1.1, 1.0.0.1]` | Resolvers pushed to opt-in clients |
+| `headscale_container_uid` / `_gid` | `65532` | Distroless `nonroot` UID/GID — single source of truth |
 | `headscale_ui_enabled` | `false` | Deploy optional headscale-ui web panel |
 
 ## Verification
@@ -161,17 +173,17 @@ sudo systemctl stop headscale
 sudo systemctl disable headscale
 sudo rm /etc/containers/systemd/headscale.container
 sudo systemctl daemon-reload
-sudo rm /mnt/config/reverse-proxy/traefik/dynamic/headscale.yml
+sudo rm <headscale_traefik_dynamic_dir>/headscale.yml
 # Traefik hot-reloads and removes the headscale route automatically.
 ```
 
 ## Auth key rotation
 
 ```bash
-sudo podman exec headscale headscale preauthkeys list --user vidar
-sudo podman exec headscale headscale preauthkeys expire --user vidar --key <old-key>
-sudo podman exec headscale headscale preauthkeys create --user vidar --expiration 1h
-sudo tailscale login --login-server https://hs.example.com --authkey <new-key>
+sudo podman exec headscale headscale preauthkeys list --user <admin>
+sudo podman exec headscale headscale preauthkeys expire --user <admin> --key <old-key>
+sudo podman exec headscale headscale preauthkeys create --user <admin> --expiration 1h
+sudo tailscale login --login-server https://headscale.example.com --authkey <new-key>
 ```
 
 ## Project layout
@@ -193,6 +205,7 @@ roles/headscale/
     acl.yml                              # render ACL policy
     quadlet.yml                          # deploy systemd Quadlet unit
     traefik.yml                          # deploy Traefik routing file
+    firewall.yml                         # restrict direct port access
     verify.yml                           # post-apply assertions
   handlers/main.yml                      # restart headscale
   meta/main.yml                          # Galaxy metadata

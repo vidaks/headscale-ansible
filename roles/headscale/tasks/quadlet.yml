@@ -7,13 +7,14 @@
     owner: root
     group: root
     mode: "0600"
-  register: headscale_quadlet_result
+  notify: Restart headscale
 
-- name: Quadlet — reload systemd daemon when unit changed
-  become: true
-  ansible.builtin.systemd:
-    daemon_reload: true
-  when: headscale_quadlet_result.changed
+# Flush handlers immediately so daemon-reload + restart happen BEFORE the
+# enable/start task below. Without the flush, enable/start would run against
+# whatever podman-system-generator emitted on the previous boot, missing any
+# changes from this apply.
+- name: Quadlet — flush handlers (daemon-reload + restart if unit changed)
+  ansible.builtin.meta: flush_handlers
 
 - name: Quadlet — enable and start headscale service
   become: true
@@ -23,12 +24,4 @@
     enabled: true
   # In check mode on first install the Quadlet file hasn't been written yet,
   # so systemd doesn't know the service. Safe to ignore in check mode only.
-  ignore_errors: "{{ ansible_check_mode }}"
-
-- name: Quadlet — restart headscale when unit changed
-  become: true
-  ansible.builtin.systemd:
-    name: "{{ headscale_service }}"
-    state: restarted
-  when: headscale_quadlet_result.changed
   ignore_errors: "{{ ansible_check_mode }}"
