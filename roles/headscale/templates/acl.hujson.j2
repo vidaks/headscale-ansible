@@ -12,5 +12,15 @@
       "src": ["*"],
       "dst": ["*:*"]
     }
-  ]
+  ],
+  // Auto-approve advertised routes and exit-node from the operator's account.
+  // Avoids the manual `headscale routes enable` step every time a node
+  // re-advertises after re-auth or upgrade.
+  "autoApprovers": {
+    "exitNode": ["vidar@"],
+    "routes": {
+      "0.0.0.0/0": ["vidar@"],
+      "::/0":      ["vidar@"],
+    },
+  },
 }

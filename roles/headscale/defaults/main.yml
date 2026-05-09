@@ -41,6 +41,14 @@ headscale_acme_hostname: ""
 # MagicDNS disabled to preserve system DNS non-interference posture.
 headscale_magic_dns: false
 
+# DNS resolvers pushed to clients that accept DNS (--accept-dns=true).
+# Cloudflare 1.1.1.1 + 1.0.0.1 by default. Override per-deployment if you
+# prefer a different resolver (Quad9 9.9.9.9, NextDNS, a Pi-hole, etc.).
+# Empty list = push no resolver (clients keep their local DNS).
+headscale_dns_global_nameservers:
+  - "1.1.1.1"
+  - "1.0.0.1"
+
 # Ephemeral node inactivity timeout. Must be >1m5s per headscale validation.
 # 0s would disable cleanup; 30m is a safe default that still removes gone nodes.
 headscale_ephemeral_node_inactivity_timeout: "30m"

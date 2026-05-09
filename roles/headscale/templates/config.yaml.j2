@@ -46,11 +46,18 @@ policy:
 
 dns:
   magic_dns: {{ headscale_magic_dns | lower }}
-  # Do not push DNS config to clients — preserves client DNS non-interference.
-  override_local_dns: false
+  # Push DNS to clients that accept it (--accept-dns=true). tux itself runs
+  # tailscale with --accept-dns=false (per its role default), so this push
+  # affects only laptop/mobile peers — they need a working resolver
+  # regardless of which network they're on (especially hotel WiFi where the
+  # local resolver is unreachable through the exit node).
+  override_local_dns: true
   base_domain: {{ headscale_dns_magic_domain | mandatory }}
   nameservers:
-    global: []
+    global:
+{% for ns in headscale_dns_global_nameservers %}
+      - {{ ns }}
+{% endfor %}
   search_domains: []
   extra_records: []
 
