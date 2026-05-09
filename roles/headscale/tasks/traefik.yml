@@ -1,0 +1,10 @@
+---
+- name: Traefik — deploy headscale routing config
+  become: true
+  ansible.builtin.template:
+    src: headscale-traefik.yml.j2
+    dest: "{{ headscale_traefik_dynamic_dir }}/headscale.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  # Traefik hot-reloads the directory; no Traefik restart required.

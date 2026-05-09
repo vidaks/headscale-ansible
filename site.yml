@@ -1,0 +1,7 @@
+---
+- name: Deploy Headscale coordination server
+  hosts: headscale_nodes
+  gather_facts: true
+  become: false
+  roles:
+    - role: headscale

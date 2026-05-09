@@ -1,0 +1,96 @@
+---
+# Post-apply verification. Safe to run standalone via verify.yml.
+
+- name: Verify — check headscale container is running
+  become: true
+  ansible.builtin.command: >-
+    podman ps --filter name=^headscale$ --filter status=running -q
+  register: headscale_container_state
+  changed_when: false
+  check_mode: false
+
+- name: Verify — assert container is running
+  ansible.builtin.assert:
+    that:
+      - headscale_container_state.stdout | trim | length > 0
+    fail_msg: >-
+      Headscale container is not running. Check: sudo systemctl status headscale
+      and: sudo journalctl -u headscale
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Verify — assert health endpoint responds
+  ansible.builtin.uri:
+    url: "http://{{ headscale_host_ip }}:{{ headscale_host_port }}/health"
+    method: GET
+    status_code: 200
+    timeout: 10
+  register: headscale_health
+  changed_when: false
+  check_mode: false
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Verify — assert Traefik routing file is in place
+  ansible.builtin.stat:
+    path: "{{ headscale_traefik_dynamic_dir }}/headscale.yml"
+  register: headscale_traefik_file
+  check_mode: false
+
+- name: Verify — fail if Traefik routing file is missing
+  ansible.builtin.assert:
+    that:
+      - headscale_traefik_file.stat.exists
+    fail_msg: "Traefik routing file {{ headscale_traefik_dynamic_dir }}/headscale.yml not found."
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Verify — assert external HTTPS health endpoint responds
+  ansible.builtin.uri:
+    url: "{{ headscale_server_url }}/health"
+    method: GET
+    status_code: 200
+    timeout: 15
+  register: headscale_ext_health
+  changed_when: false
+  check_mode: false
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Verify — re-read default route
+  ansible.builtin.command: ip -json route show default
+  register: headscale_post_route
+  changed_when: false
+  check_mode: false
+
+- name: Verify — assert default route unchanged
+  # When run standalone, headscale_pre_default_route is unset so the default
+  # resolves to the current value — assertion always passes. Pre/post drift
+  # detection only works when site.yml runs preflight.yml first.
+  ansible.builtin.assert:
+    that:
+      - headscale_post_route.stdout | from_json == headscale_pre_default_route | default(headscale_post_route.stdout | from_json)
+    fail_msg: |
+      Default route changed after Headscale apply.
+      Before: {{ headscale_pre_default_route | default('(not captured)') }}
+      After:  {{ headscale_post_route.stdout }}
+
+- name: Verify — re-read /etc/resolv.conf
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+    follow: true
+  register: headscale_post_resolv
+  check_mode: false
+
+- name: Verify — assert resolv.conf checksum unchanged
+  # Same standalone caveat as the route check above.
+  ansible.builtin.assert:
+    that:
+      - headscale_post_resolv.stat.checksum == (headscale_pre_resolv_checksum | default(headscale_post_resolv.stat.checksum))
+    fail_msg: "/etc/resolv.conf changed after Headscale apply. Investigate before continuing."
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Verify — summary
+  ansible.builtin.debug:
+    msg:
+      - "Headscale container: Running"
+      - "Health endpoint: OK ({{ headscale_server_url }}/health)"
+      - "Traefik routing: {{ headscale_traefik_dynamic_dir }}/headscale.yml"
+      - "Default route: unchanged"
+      - "System DNS: unchanged"

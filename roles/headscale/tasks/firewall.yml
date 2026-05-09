@@ -1,0 +1,63 @@
+---
+# Restrict direct access to the headscale container port.
+#
+# Standard firewalld rich rules run post-DNAT (filter priority +10) and cannot
+# match on the original destination port once netavark has rewritten it (DNAT
+# priority -100). The only effective hook is mangle PREROUTING (priority -140),
+# which runs before DNAT and can match on the original daddr:dport.
+#
+# The rule drops traffic from any source outside headscale_trusted_network
+# (the container bridge) to headscale_host_ip:headscale_host_port, preventing
+# LAN devices from bypassing Traefik and CrowdSec.
+#
+# IPv4-only by design. The Quadlet PublishPort uses an IPv4 literal
+# (headscale_host_ip), so the container only listens on IPv4 — there is no
+# IPv6 listener to bypass. preflight.yml asserts headscale_host_ip is IPv4 to
+# keep this invariant true. If the binding is ever changed to dual-stack, an
+# equivalent ipv6 mangle rule must be added here.
+
+- name: Firewall — check if mangle rule already exists (runtime)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --direct --query-rule ipv4 mangle PREROUTING 10
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    ! -s {{ headscale_trusted_network }}
+    -j DROP
+  register: headscale_fw_runtime_check
+  changed_when: false
+  failed_when: false
+
+- name: Firewall — check if mangle rule already exists (permanent)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --permanent --direct --query-rule ipv4 mangle PREROUTING 10
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    ! -s {{ headscale_trusted_network }}
+    -j DROP
+  register: headscale_fw_permanent_check
+  changed_when: false
+  failed_when: false
+
+- name: Firewall — add runtime mangle rule (takes effect immediately)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --direct --add-rule ipv4 mangle PREROUTING 10
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    ! -s {{ headscale_trusted_network }}
+    -j DROP
+  when: headscale_fw_runtime_check.rc != 0
+  changed_when: true
+
+- name: Firewall — add permanent mangle rule (survives reload/reboot)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --permanent --direct --add-rule ipv4 mangle PREROUTING 10
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    ! -s {{ headscale_trusted_network }}
+    -j DROP
+  when: headscale_fw_permanent_check.rc != 0
+  changed_when: true

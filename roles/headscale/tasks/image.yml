@@ -1,0 +1,8 @@
+---
+- name: Image — pull Headscale container image
+  become: true
+  containers.podman.podman_image:
+    name: "{{ headscale_image }}"
+    tag: "{{ headscale_version }}"
+    state: present
+    force: false

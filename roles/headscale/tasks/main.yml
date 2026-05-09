@@ -1,0 +1,40 @@
+---
+- name: Preflight — validate inputs and snapshot host state
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [headscale, preflight]
+
+- name: Create configuration and data directories
+  ansible.builtin.import_tasks: dirs.yml
+  tags: [headscale, install]
+
+- name: Pull Headscale container image
+  ansible.builtin.import_tasks: image.yml
+  tags: [headscale, install]
+
+- name: Deploy Headscale configuration
+  ansible.builtin.import_tasks: config.yml
+  tags: [headscale, configure]
+
+- name: Deploy ACL policy
+  ansible.builtin.import_tasks: acl.yml
+  tags: [headscale, configure]
+
+- name: Deploy Quadlet systemd unit
+  ansible.builtin.import_tasks: quadlet.yml
+  tags: [headscale, install]
+
+- name: Restrict headscale port to container network
+  ansible.builtin.import_tasks: firewall.yml
+  tags: [headscale, firewall]
+
+- name: Register Traefik routing
+  ansible.builtin.import_tasks: traefik.yml
+  tags: [headscale, traefik]
+
+- name: Flush handlers before verify so config changes are applied
+  ansible.builtin.meta: flush_handlers
+  tags: [headscale, verify]
+
+- name: Verify end state
+  ansible.builtin.import_tasks: verify.yml
+  tags: [headscale, verify]

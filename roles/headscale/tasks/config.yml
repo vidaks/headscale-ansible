@@ -1,0 +1,10 @@
+---
+- name: Config — deploy headscale config.yaml
+  become: true
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: "{{ headscale_config_dir }}/config.yaml"
+    owner: "65532"
+    group: "65532"
+    mode: "0600"
+  notify: Restart headscale

@@ -1,0 +1,59 @@
+# Headscale configuration — managed by Ansible. Do not edit manually.
+# Changes require: ansible-playbook site.yml --tags headscale,configure
+
+server_url: {{ headscale_server_url | mandatory }}
+
+listen_addr: {{ headscale_listen_addr }}
+metrics_listen_addr: {{ headscale_metrics_addr }}
+
+# TLS is terminated by Traefik; headscale serves plain HTTP internally.
+tls_letsencrypt_hostname: ""
+tls_cert_path: ""
+tls_key_path: ""
+
+# Noise protocol (TS2021) key storage.
+noise:
+  private_key_path: {{ headscale_container_data_dir }}/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: {{ headscale_embedded_derp_enabled | lower }}
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+  update_frequency: 24h
+
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: {{ headscale_ephemeral_node_inactivity_timeout }}
+
+database:
+  type: {{ headscale_db_type }}
+  sqlite:
+    path: {{ headscale_db_path }}
+
+log:
+  level: {{ headscale_log_level }}
+  format: {{ headscale_log_format }}
+
+policy:
+  mode: file
+  path: {{ headscale_acl_path }}
+
+dns:
+  magic_dns: {{ headscale_magic_dns | lower }}
+  # Do not push DNS config to clients — preserves client DNS non-interference.
+  override_local_dns: false
+  base_domain: {{ headscale_dns_magic_domain | mandatory }}
+  nameservers:
+    global: []
+  search_domains: []
+  extra_records: []
+
+# Socket goes in the data dir (writable volume) since container is ReadOnly=true.
+unix_socket: {{ headscale_container_data_dir }}/headscale.sock
+unix_socket_permission: "0770"

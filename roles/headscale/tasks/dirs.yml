@@ -1,0 +1,18 @@
+---
+- name: Dirs — create headscale configuration directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ headscale_config_dir }}"
+    state: directory
+    owner: "{{ headscale_container_uid }}"
+    group: "{{ headscale_container_gid }}"
+    mode: "0700"
+
+- name: Dirs — create headscale data directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ headscale_data_dir }}"
+    state: directory
+    owner: "{{ headscale_container_uid }}"
+    group: "{{ headscale_container_gid }}"
+    mode: "0700"

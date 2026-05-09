@@ -1,0 +1,21 @@
+---
+galaxy_info:
+  role_name: headscale
+  author: homelab
+  description: >-
+    Deploy and configure Headscale (self-hosted Tailscale coordination server)
+    as a rootful Podman Quadlet container on Fedora, behind an existing Traefik
+    reverse proxy, without modifying system DNS or routing.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Fedora
+      versions:
+        - all
+  galaxy_tags:
+    - networking
+    - vpn
+    - headscale
+    - tailscale
+    - fedora
+dependencies: []

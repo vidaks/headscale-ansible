@@ -1,0 +1,49 @@
+# Headscale Quadlet container unit — managed by Ansible.
+# Changes require: ansible-playbook site.yml --tags headscale,install
+
+[Unit]
+Description=Headscale coordination server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Container]
+Image={{ headscale_image }}:{{ headscale_version }}
+ContainerName=headscale
+Exec=serve
+# ko-app distroless nonroot user. Dirs are owned by the same UID/GID — see
+# headscale_container_uid/gid in defaults/main.yml.
+User={{ headscale_container_uid }}:{{ headscale_container_gid }}
+
+Volume={{ headscale_config_dir }}/:{{ headscale_container_config_dir }}/:ro,z
+Volume={{ headscale_data_dir }}/:{{ headscale_container_data_dir }}/:z
+
+# Bind to the host IP so Traefik (bridge network) can route to this container.
+PublishPort={{ headscale_host_ip }}:{{ headscale_host_port }}:8080
+# Metrics internal only — not exposed on the public interface.
+PublishPort=127.0.0.1:{{ headscale_metrics_host_port }}:9091
+
+ReadOnly=true
+NoNewPrivileges=true
+# Headscale is a Go HTTP server — it requires zero Linux capabilities.
+DropCapability=all
+
+# Headscale writes noise key + SQLite to data dir; needs a writable tmp.
+Tmpfs=/tmp
+
+PodmanArgs=--memory=256m --ipc=private
+HealthCmd=["CMD", "headscale", "health"]
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=30s
+HealthOnFailure=stop
+
+[Service]
+Restart=always
+RestartSec=10s
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

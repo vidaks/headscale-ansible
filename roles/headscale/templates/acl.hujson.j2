@@ -1,0 +1,16 @@
+// Headscale ACL policy — managed by Ansible.
+// HuJSON: standard JSON with C-style comments and trailing commas allowed.
+// Changes require: ansible-playbook site.yml --tags headscale,configure
+//
+// Permissive by design: this is a single-user homelab; all authenticated
+// nodes belong to the same operator. Tighten via tags if multi-tenant ever
+// becomes a goal. Audit-confirmed acceptable 2026-05-09.
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["*"],
+      "dst": ["*:*"]
+    }
+  ]
+}

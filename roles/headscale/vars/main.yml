@@ -1,0 +1,9 @@
+---
+# Internal, non-overridable constants.
+
+headscale_service: headscale
+headscale_quadlet_dir: /etc/containers/systemd
+headscale_container_config_dir: /etc/headscale
+headscale_container_data_dir: /var/lib/headscale
+headscale_db_path: "{{ headscale_container_data_dir }}/db.sqlite"
+headscale_acl_path: "{{ headscale_container_config_dir }}/acl.hujson"

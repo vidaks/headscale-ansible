@@ -1,0 +1,64 @@
+---
+# All tunables for the headscale role. Safe, restrictive defaults.
+
+headscale_version: "0.28.0"
+headscale_image: "ghcr.io/juanfont/headscale"
+
+# REQUIRED — must be set in group_vars/all/vars.yml (gitignored).
+headscale_server_url: ""
+headscale_domain: ""
+headscale_dns_magic_domain: ""
+headscale_host_ip: ""
+headscale_traefik_dynamic_dir: ""
+
+# Listen addresses.
+# Bind to 0.0.0.0 so Traefik can reach the container via the host IP.
+# Metrics on localhost only — not exposed publicly.
+# Port 9091 avoids collision with Cockpit (9090).
+headscale_listen_addr: "0.0.0.0:8080"
+headscale_metrics_addr: "0.0.0.0:9091"
+headscale_host_port: 8080
+headscale_metrics_host_port: 9091
+
+# Filesystem paths on the host (outside container).
+headscale_config_dir: "/mnt/config/headscale"
+headscale_data_dir: "/mnt/config/headscale/data"
+
+# Database. SQLite is recommended by upstream; PostgreSQL is legacy-only.
+headscale_db_type: "sqlite"
+
+# Logging.
+headscale_log_level: "warn"
+headscale_log_format: "json"
+
+# DERP: use Tailscale's public DERP network initially.
+# Embedded DERP adds STUN (3478/udp) and requires public IP config.
+headscale_embedded_derp_enabled: false
+
+# Headscale's built-in ACME is disabled — Traefik owns all TLS.
+headscale_acme_hostname: ""
+
+# MagicDNS disabled to preserve system DNS non-interference posture.
+headscale_magic_dns: false
+
+# Ephemeral node inactivity timeout. Must be >1m5s per headscale validation.
+# 0s would disable cleanup; 30m is a safe default that still removes gone nodes.
+headscale_ephemeral_node_inactivity_timeout: "30m"
+
+# Network allowed to reach headscale directly (container bridge).
+# Traffic from any other source is dropped in mangle PREROUTING, before DNAT.
+# Find the bridge subnet with: ip addr show podman0
+headscale_trusted_network: "10.88.0.0/16"
+
+# ko-app distroless nonroot user. Must match the image's runtime UID/GID.
+# Verified for ghcr.io/juanfont/headscale:0.28.0. Used by dirs.yml ownership
+# and the Quadlet User= directive — single source of truth.
+headscale_container_uid: 65532
+headscale_container_gid: 65532
+
+# Optional headscale-ui companion web panel.
+headscale_ui_enabled: false
+headscale_ui_version: "2024.2.0"
+headscale_ui_image: "ghcr.io/gurucomputing/headscale-ui"
+headscale_ui_domain: ""
+headscale_ui_host_port: 3000

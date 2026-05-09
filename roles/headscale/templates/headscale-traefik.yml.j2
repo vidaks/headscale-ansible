@@ -1,0 +1,26 @@
+# Traefik dynamic configuration for Headscale — managed by Ansible (headscale role).
+# Traefik hot-reloads this file; no Traefik restart needed on changes.
+# Changes require: ansible-playbook headscale/site.yml --tags headscale,traefik
+
+http:
+  routers:
+    headscale:
+      rule: "Host(`{{ headscale_domain }}`)"
+      entryPoints:
+        - websecure
+      service: headscale
+      # No Authelia — Tailscale clients authenticate directly with headscale
+      # via the TS2021 Noise protocol. ForwardAuth would break client auth.
+      middlewares:
+        - crowdsec
+        - rate-limit
+        - security-headers
+
+  services:
+    headscale:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          # HTTP/1.1 — TS2021 uses WebSocket (Upgrade header), not gRPC.
+          # Traefik handles the WebSocket upgrade transparently.
+          - url: "http://{{ headscale_host_ip }}:{{ headscale_host_port }}"

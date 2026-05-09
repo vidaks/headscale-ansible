@@ -1,0 +1,34 @@
+---
+- name: Quadlet — deploy headscale container unit
+  become: true
+  ansible.builtin.template:
+    src: headscale.container.j2
+    dest: "{{ headscale_quadlet_dir }}/headscale.container"
+    owner: root
+    group: root
+    mode: "0600"
+  register: headscale_quadlet_result
+
+- name: Quadlet — reload systemd daemon when unit changed
+  become: true
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: headscale_quadlet_result.changed
+
+- name: Quadlet — enable and start headscale service
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ headscale_service }}"
+    state: started
+    enabled: true
+  # In check mode on first install the Quadlet file hasn't been written yet,
+  # so systemd doesn't know the service. Safe to ignore in check mode only.
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Quadlet — restart headscale when unit changed
+  become: true
+  ansible.builtin.systemd:
+    name: "{{ headscale_service }}"
+    state: restarted
+  when: headscale_quadlet_result.changed
+  ignore_errors: "{{ ansible_check_mode }}"

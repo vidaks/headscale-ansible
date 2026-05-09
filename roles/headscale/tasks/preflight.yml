@@ -1,0 +1,81 @@
+---
+# Validate inputs and snapshot host state that must not be disturbed.
+
+- name: Preflight — assert required variables are set
+  ansible.builtin.assert:
+    that:
+      - headscale_server_url | length > 0
+      - headscale_server_url is match('^https://')
+      - headscale_domain | length > 0
+      - headscale_dns_magic_domain | length > 0
+      - headscale_host_ip | length > 0
+      - headscale_traefik_dynamic_dir | length > 0
+    fail_msg: >-
+      One or more required variables are unset or invalid.
+      Set headscale_server_url (must start with https://), headscale_domain,
+      headscale_dns_magic_domain, headscale_host_ip, and headscale_traefik_dynamic_dir
+      in group_vars/all/vars.yml.
+
+- name: Preflight — assert Traefik dynamic config directory exists
+  ansible.builtin.stat:
+    path: "{{ headscale_traefik_dynamic_dir }}"
+  register: headscale_traefik_dir_stat
+  check_mode: false
+
+- name: Preflight — fail if Traefik dynamic directory is missing
+  ansible.builtin.assert:
+    that:
+      - headscale_traefik_dir_stat.stat.exists
+      - headscale_traefik_dir_stat.stat.isdir
+    fail_msg: >-
+      Traefik dynamic config directory '{{ headscale_traefik_dynamic_dir }}' does not exist.
+      Run the plexarr reverse-proxy role first to migrate Traefik to directory provider mode.
+
+- name: Preflight — assert host IP is configured on a local interface
+  ansible.builtin.command: ip -json addr show
+  register: headscale_preflight_addrs
+  changed_when: false
+  check_mode: false
+
+- name: Preflight — verify host IP is present
+  ansible.builtin.assert:
+    that:
+      - headscale_host_ip in (headscale_preflight_addrs.stdout | from_json
+          | map(attribute='addr_info') | flatten
+          | map(attribute='local') | list)
+    fail_msg: >-
+      headscale_host_ip '{{ headscale_host_ip }}' is not assigned to any interface
+      on this host. Update group_vars/all/vars.yml.
+
+# The Quadlet PublishPort and the firewall mangle rule are both IPv4-only by
+# design. An IPv6 headscale_host_ip would silently bypass the LAN-isolation
+# rule, so we refuse to apply if it isn't a dotted-quad IPv4 literal.
+- name: Preflight — assert headscale_host_ip is IPv4
+  ansible.builtin.assert:
+    that:
+      - headscale_host_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
+    fail_msg: >-
+      headscale_host_ip '{{ headscale_host_ip }}' must be an IPv4 dotted-quad.
+      The Quadlet PublishPort and firewall mangle rule are IPv4-only by design;
+      an IPv6 address would silently bypass the LAN-isolation rule.
+
+- name: Preflight — snapshot default route
+  ansible.builtin.command: ip -json route show default
+  register: headscale_preflight_route
+  changed_when: false
+  check_mode: false
+
+- name: Preflight — record default route fact
+  ansible.builtin.set_fact:
+    headscale_pre_default_route: "{{ headscale_preflight_route.stdout | from_json }}"
+
+- name: Preflight — snapshot /etc/resolv.conf checksum
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+    follow: true
+  register: headscale_preflight_resolv
+  check_mode: false
+
+- name: Preflight — record resolv.conf checksum fact
+  ansible.builtin.set_fact:
+    headscale_pre_resolv_checksum: "{{ headscale_preflight_resolv.stat.checksum | default('') }}"

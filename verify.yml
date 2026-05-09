@@ -1,0 +1,13 @@
+---
+# Read-only verification. Must never change system state.
+# Safe to run standalone: ansible-playbook verify.yml
+
+- name: Verify Headscale posture
+  hosts: headscale_nodes
+  gather_facts: true
+  become: false
+  tasks:
+    - name: Run verify tasks
+      ansible.builtin.import_role:
+        name: headscale
+        tasks_from: verify.yml

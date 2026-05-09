@@ -1,0 +1,10 @@
+---
+- name: ACL — deploy headscale ACL policy
+  become: true
+  ansible.builtin.template:
+    src: acl.hujson.j2
+    dest: "{{ headscale_config_dir }}/acl.hujson"
+    owner: "65532"
+    group: "65532"
+    mode: "0600"
+  notify: Restart headscale
