@@ -29,7 +29,12 @@ derp:
   update_frequency: 24h
 
 disable_check_updates: true
-ephemeral_node_inactivity_timeout: {{ headscale_ephemeral_node_inactivity_timeout }}
+
+# Since 0.29 the top-level ephemeral_node_inactivity_timeout is deprecated;
+# the setting lives under node.ephemeral. Role var is unchanged.
+node:
+  ephemeral:
+    inactivity_timeout: {{ headscale_ephemeral_node_inactivity_timeout }}
 
 database:
   type: {{ headscale_db_type }}

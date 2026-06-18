@@ -1,7 +1,7 @@
 ---
 # All tunables for the headscale role. Safe, restrictive defaults.
 
-headscale_version: "0.28.0"
+headscale_version: "0.29.0"
 headscale_image: "ghcr.io/juanfont/headscale"
 
 # REQUIRED — must be set in group_vars/all/vars.yml (gitignored).
@@ -67,14 +67,14 @@ headscale_ephemeral_node_inactivity_timeout: "30m"
 headscale_trusted_network: "10.88.0.0/16"
 
 # ko-app distroless nonroot user. Must match the image's runtime UID/GID.
-# Verified for ghcr.io/juanfont/headscale:0.28.0. Used by dirs.yml ownership
+# Verified for ghcr.io/juanfont/headscale:0.29.0. Used by dirs.yml ownership
 # and the Quadlet User= directive — single source of truth.
 headscale_container_uid: 65532
 headscale_container_gid: 65532
 
 # Optional headscale-ui companion web panel.
 headscale_ui_enabled: false
-headscale_ui_version: "2024.2.0"
+headscale_ui_version: "2026.03.17"
 headscale_ui_image: "ghcr.io/gurucomputing/headscale-ui"
 headscale_ui_domain: ""
 headscale_ui_host_port: 3000
