@@ -61,3 +61,58 @@
     -j DROP
   when: headscale_fw_permanent_check.rc != 0
   changed_when: true
+
+# Higher-priority (9 < 10) RETURN exceptions for additional trusted source
+# networks — evaluated before the DROP above. Empty by default, so this is a
+# no-op unless headscale_trusted_proxy_networks is set (e.g. a multi-homed
+# proxy that may egress toward the host from a secondary container network).
+
+- name: Firewall — check if proxy-network exception exists (runtime)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --direct --query-rule ipv4 mangle PREROUTING 9
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    -s {{ item }}
+    -j RETURN
+  register: headscale_fw_proxy_runtime_check
+  changed_when: false
+  failed_when: false
+  loop: "{{ headscale_trusted_proxy_networks }}"
+
+- name: Firewall — add runtime proxy-network exception (takes effect immediately)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --direct --add-rule ipv4 mangle PREROUTING 9
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    -s {{ item.item }}
+    -j RETURN
+  loop: "{{ headscale_fw_proxy_runtime_check.results }}"
+  when: item.rc != 0
+  changed_when: true
+
+- name: Firewall — check if proxy-network exception exists (permanent)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --permanent --direct --query-rule ipv4 mangle PREROUTING 9
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    -s {{ item }}
+    -j RETURN
+  register: headscale_fw_proxy_permanent_check
+  changed_when: false
+  failed_when: false
+  loop: "{{ headscale_trusted_proxy_networks }}"
+
+- name: Firewall — add permanent proxy-network exception (survives reload/reboot)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --permanent --direct --add-rule ipv4 mangle PREROUTING 9
+    -p tcp
+    -d {{ headscale_host_ip }} --dport {{ headscale_host_port }}
+    -s {{ item.item }}
+    -j RETURN
+  loop: "{{ headscale_fw_proxy_permanent_check.results }}"
+  when: item.rc != 0
+  changed_when: true

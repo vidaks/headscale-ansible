@@ -66,6 +66,15 @@ headscale_ephemeral_node_inactivity_timeout: "30m"
 # Find the bridge subnet with: ip addr show podman0
 headscale_trusted_network: "10.88.0.0/16"
 
+# Additional source networks permitted to reach the backend port, on top of
+# headscale_trusted_network. Each is rendered as a higher-priority RETURN
+# exception in mangle PREROUTING (evaluated before the DROP). Needed when the
+# reverse proxy is multi-homed: with several equal-metric default routes it may
+# egress toward the host from a secondary container network whose source IP
+# falls outside headscale_trusted_network. The DROP would then block it —
+# observed as the proxy returning 504 on the headscale route. Default empty.
+headscale_trusted_proxy_networks: []
+
 # ko-app distroless nonroot user. Must match the image's runtime UID/GID.
 # Verified for ghcr.io/juanfont/headscale:0.29.0. Used by dirs.yml ownership
 # and the Quadlet User= directive — single source of truth.
