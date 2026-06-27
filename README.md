@@ -99,26 +99,83 @@ ansible-playbook site.yml                    # must report changed=0
 
 ## Client onboarding
 
-Headscale manages its own auth keys — not Tailscale SaaS keys. Replace `<admin>` with
-the value of `headscale_admin_user` from your vars file.
+Headscale issues its own credentials. There is no password and no Tailscale
+account. You authorize a device with a pre-auth key — a short-lived token minted
+on the server. Run every server command inside the container:
+`sudo podman exec headscale headscale ...`.
+
+The server also serves a live setup page per platform at
+`https://headscale.example.com/apple` (iOS, iPadOS, macOS, tvOS). The steps below
+match it.
+
+### Add a user
+
+A user owns the devices registered under it. List users, or create one:
 
 ```bash
-# Create the user (one-time)
-sudo podman exec headscale headscale users create <admin>
-
-# Generate a pre-auth key (expires in 1 hour by default)
-sudo podman exec headscale headscale preauthkeys create --user <admin> --expiration 1h
+sudo podman exec headscale headscale users list
+sudo podman exec headscale headscale users create alice --email alice@example.com
 ```
 
-**macOS / Linux client:**
+The username is a positional argument. `--email` and `--display-name` are
+optional. Note the numeric ID from `users list`. The pre-auth key command takes
+the ID, not the name.
+
+### Generate a pre-auth key
+
 ```bash
-sudo tailscale login --login-server https://headscale.example.com --authkey <key>
-tailscale status
+# single-use key, valid 24h, for user ID 1
+sudo podman exec headscale headscale preauthkeys create --user 1 --expiration 24h
 ```
 
-**iOS / iPadOS (Tailscale app):**
-Settings → ALTERNATE COORDINATION SERVER URL → `https://headscale.example.com`
-Then tap "Sign in" and use the pre-auth key when prompted.
+| Flag | Effect |
+|---|---|
+| `--user <id>` | Owning user, by numeric ID. Required |
+| `--expiration <dur>` | Key lifetime, e.g. `1h`, `24h`. Default `1h`. Bounds key use, not node lifetime |
+| `--reusable` | Let more than one device use the key |
+| `--ephemeral` | Remove nodes joined with the key when they go offline |
+| `--tags <tag,...>` | Assign ACL tags to the node |
+
+The command prints the key (`hskey-auth-…`). It is a secret and expires on its
+own. List or revoke keys by ID:
+
+```bash
+sudo podman exec headscale headscale preauthkeys list          # all keys, with ID and owner
+sudo podman exec headscale headscale preauthkeys expire --id 5 # revoke key ID 5
+```
+
+### Connect a device
+
+Set the coordination server on the device, then authorize it with the key.
+
+**iOS and iPadOS** — the same Tailscale app from the App Store:
+
+1. Install and open Tailscale.
+2. Tap the account icon (top right) and select **Log in…**.
+3. Tap the options menu (top right) and select **Use custom coordination server**.
+4. Enter `https://headscale.example.com`.
+5. Sign in. Provide the pre-auth key when prompted.
+
+**macOS** — choose one method:
+
+- Command line (`tailscale` from Homebrew):
+  ```bash
+  tailscale up --login-server https://headscale.example.com --authkey <key>
+  tailscale status
+  ```
+- GUI app: hold **Option (⌥)** and click the Tailscale menu-bar icon. Hover
+  **Debug**, open **Custom Login Server**, then **Add Account…**. Enter
+  `https://headscale.example.com` and finish the browser sign-in.
+- Config profile: download and inspect
+  `https://headscale.example.com/apple/macos-app-store` (App Store build) or
+  `https://headscale.example.com/apple/macos-standalone` (standalone build).
+  Install it under **System Settings → Profiles**. Restart Tailscale and sign in.
+
+Confirm the device on the server:
+
+```bash
+sudo podman exec headscale headscale nodes list
+```
 
 ## Role variables
 
@@ -180,9 +237,9 @@ sudo rm <headscale_traefik_dynamic_dir>/headscale.yml
 ## Auth key rotation
 
 ```bash
-sudo podman exec headscale headscale preauthkeys list --user <admin>
-sudo podman exec headscale headscale preauthkeys expire --user <admin> --key <old-key>
-sudo podman exec headscale headscale preauthkeys create --user <admin> --expiration 1h
+sudo podman exec headscale headscale preauthkeys list             # find the old key ID
+sudo podman exec headscale headscale preauthkeys expire --id 5    # revoke it
+sudo podman exec headscale headscale preauthkeys create --user 1 --expiration 24h
 sudo tailscale login --login-server https://headscale.example.com --authkey <new-key>
 ```
 
