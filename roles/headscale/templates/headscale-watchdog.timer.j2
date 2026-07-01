@@ -1,0 +1,13 @@
+# Fires the headscale watchdog on a tight cadence — connectivity is critical
+# (remote SSH recovery depends on it). Managed by Ansible (headscale role).
+[Unit]
+Description=Headscale reachability watchdog timer
+
+[Timer]
+OnBootSec={{ headscale_watchdog_interval }}
+OnUnitActiveSec={{ headscale_watchdog_interval }}
+# No Persistent= — it only applies to OnCalendar= (wall-clock) timers; on a
+# monotonic OnBootSec/OnUnitActiveSec timer it is inert.
+
+[Install]
+WantedBy=timers.target

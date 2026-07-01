@@ -1,8 +1,10 @@
 ---
-- name: Restart headscale
-  become: true
-  ansible.builtin.systemd:
-    name: "{{ headscale_service }}"
-    state: restarted
-    daemon_reload: true
-  ignore_errors: "{{ ansible_check_mode }}"
+# INTENTIONALLY EMPTY. Headscale's restart is NOT a handler.
+#
+# A handler restart fires during `meta: flush_handlers`, and a handler that fails
+# (e.g. the new image won't start) aborts the play WITHOUT triggering the
+# rollback rescue in tasks/main.yml — so a fail-to-start upgrade would strand
+# headscale on the broken image with no auto-recovery (proven by a hello-world
+# fault-injection test: rescued=0). The restart is therefore an EXPLICIT,
+# change-gated, rescuable task inside the verify block in tasks/main.yml. Do NOT
+# reintroduce a `notify: Restart headscale` handler here. See plan 26.

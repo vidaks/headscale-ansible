@@ -3,6 +3,53 @@
   ansible.builtin.import_tasks: preflight.yml
   tags: [headscale, preflight]
 
+# jq: the watchdog's anti-thrash state machine reads/writes state.json at RUNTIME —
+# without it repairs_in_window silently returns 0, backoff never engages, and a
+# persistent fault thrash-restarts every interval. sqlite: consistent DB snapshots
+# for the rollback insurance in the block below. Both idempotent. See plan 26 (S3 + B2).
+- name: Install watchdog + rollback host dependencies
+  become: true
+  ansible.builtin.dnf:
+    name:
+      - jq
+      - sqlite
+    state: present
+  tags: [headscale, install, packages]
+
+# Capture the currently-running image tag BEFORE we pull/deploy the new one, so
+# a version bump that fails verification can auto-roll-back to the known-good
+# tag. The watchdog can restart headscale but cannot downgrade a broken image —
+# this closes that gap. Empty on a fresh install (no prior) → rollback is a
+# no-op and a bad first deploy just fails loudly. See plan 26 (D6).
+- name: Capture the currently-running headscale image tag (rollback anchor)
+  become: true
+  ansible.builtin.command: podman inspect --type container headscale --format '{% raw %}{{.ImageName}}{% endraw %}'
+  register: headscale_running_image
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  tags: [headscale, install, configure, verify]
+
+- name: Record the prior known-good headscale image (rollback anchor)
+  ansible.builtin.set_fact:
+    # FULL image reference, used verbatim to roll back (see the rescue below) so
+    # a revert is correct whether headscale is tag-pinned (repo:tag) or ever
+    # digest-pinned (repo@sha256:...). Re-deriving a bare tag by regex would strip
+    # a digest to naked hex and render an invalid Image=. See plan 26 (finding 2).
+    headscale_prior_image_ref: >-
+      {{ (headscale_running_image.stdout | trim)
+         if (headscale_running_image.rc == 0
+             and (headscale_running_image.stdout | default('') | trim) | length > 0)
+         else '' }}
+    # Human-readable version for alert/log text ONLY — never used to build Image=.
+    # [:@] so it reads sensibly for a tag or a digest ref.
+    headscale_prior_version: >-
+      {{ (headscale_running_image.stdout | trim | regex_replace('^.*[:@]', ''))
+         if (headscale_running_image.rc == 0
+             and ((':' in (headscale_running_image.stdout | default(''))) or ('@' in (headscale_running_image.stdout | default('')))))
+         else '' }}
+  tags: [headscale, install, configure, verify]
+
 - name: Create configuration and data directories
   ansible.builtin.import_tasks: dirs.yml
   tags: [headscale, install]
@@ -31,10 +78,169 @@
   ansible.builtin.import_tasks: traefik.yml
   tags: [headscale, traefik]
 
-- name: Flush handlers before verify so config changes are applied
-  ansible.builtin.meta: flush_handlers
-  tags: [headscale, verify]
+# Hold the deploy sentinel across the restart + verify so the watchdog defers to
+# this deploy instead of racing it (a version-bump's slow image pull can exceed
+# the watchdog's confirm window). `always` releases it even if verify FAILS —
+# otherwise a failed deploy would suppress the watchdog for the lock's max-age
+# exactly when headscale is down and the watchdog is needed most. See plan 26.
+- name: Restart + verify with the watchdog suppressed
+  tags: [headscale, install, configure, verify]
+  block:
+    - name: Hold deploy sentinel during restart + verify
+      become: true
+      ansible.builtin.file:
+        path: "{{ headscale_watchdog_deploy_lock }}"
+        state: touch
+        mode: "0644"
+      changed_when: false   # transient operational lock, not config drift
 
-- name: Verify end state
-  ansible.builtin.import_tasks: verify.yml
-  tags: [headscale, verify]
+    - name: Snapshot the headscale DB before an image change (rollback insurance)
+      become: true
+      ansible.builtin.command:
+        cmd: >-
+          sqlite3 {{ headscale_data_dir }}/db.sqlite
+          ".backup '{{ headscale_data_dir }}/db.sqlite.pre-upgrade'"
+      # Only when the container image is about to change (a version bump carries
+      # migration risk; a config-only change does not). headscale schema migrations
+      # are forward-only + irreversible, so if a rollback to the prior binary can't
+      # read a forward-migrated DB, THIS consistent hot snapshot (sqlite .backup,
+      # taken while the PRIOR version is still running) is the operator's restore
+      # point — surfaced in the rollback-failed message below. Best-effort: never
+      # block a deploy on a snapshot hiccup. See plan 26 (review B2).
+      when: headscale_quadlet_render is defined and headscale_quadlet_render.changed
+      changed_when: false
+      failed_when: false
+
+    - name: Restart headscale to apply changes (explicit — a fail-to-start rolls back)
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ headscale_service }}"
+        state: restarted
+        daemon_reload: true
+      # EXPLICIT task, not `meta: flush_handlers`: a container that fails to START
+      # then surfaces as a RESCUABLE task failure → the rescue below auto-rolls-back.
+      # A handler failure during flush_handlers is NOT caught by rescue (proven by a
+      # hello-world fault-injection test — it aborted upstream of the block with
+      # rescued=0). Gated on a real change so a no-op apply does not restart
+      # (idempotency); the `is defined and` guards keep the register vars safe when
+      # undefined under an odd tag filter. daemon_reload lives HERE only — regenerates the
+      # unit from the rendered .container; putting it on the always-run start task
+      # below would report `changed` every run and break the changed=0 contract.
+      when: >-
+        (headscale_config_render is defined and headscale_config_render.changed)
+        or (headscale_acl_render is defined and headscale_acl_render.changed)
+        or (headscale_quadlet_render is defined and headscale_quadlet_render.changed)
+      # In check mode on a fresh host the unit isn't generated yet, so the systemd
+      # module errors on the unknown unit — that must NOT trip the rescue on a dry
+      # run. Real runs keep ignore_errors=false so a genuine fail-to-start rolls back.
+      ignore_errors: "{{ ansible_check_mode }}"
+
+    - name: Ensure headscale is enabled and running
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ headscale_service }}"
+        state: started
+        enabled: true
+      # No daemon_reload here (see above). First install still works: the quadlet
+      # render is `changed`, so the restart task above fires and its daemon_reload
+      # generates + starts the unit; this only enforces enabled + running after.
+      ignore_errors: "{{ ansible_check_mode }}"
+
+    - name: Verify end state
+      ansible.builtin.import_tasks: verify.yml
+
+  # On ANY failure in the block above (notably verify's external-health check),
+  # auto-roll-back to the prior known-good image tag so a bad version bump does
+  # not leave headscale — the operator's remote-access lifeline — down. Then fail
+  # loudly so the operator knows the intended upgrade did not stick. Only runs on
+  # failure, so a healthy deploy is untouched. See plan 26 (D6).
+  rescue:
+    - name: Rollback — no known-good prior image to fall back to
+      when: >-
+        headscale_prior_image_ref | length == 0
+        or headscale_prior_image_ref == (headscale_image ~ ':' ~ headscale_version)
+      ansible.builtin.fail:
+        msg: >-
+          Headscale deploy FAILED verification and there is no distinct prior
+          image to roll back to (prior='{{ headscale_prior_image_ref }}',
+          target='{{ headscale_image }}:{{ headscale_version }}'). Headscale may be
+          DOWN — investigate now: journalctl -u headscale; podman logs headscale.
+
+    - name: Rollback — pin the Quadlet back to the prior known-good image
+      ansible.builtin.set_fact:
+        # A SEPARATE var (not headscale_version) so the revert still works when the
+        # operator supplied the target via -e: extra-vars outrank set_fact, so
+        # reassigning headscale_version here would silently no-op. The template
+        # prefers headscale_rollback_image when defined. See plan 26 (D6 + finding 2).
+        headscale_rollback_image: "{{ headscale_prior_image_ref }}"
+
+    - name: Rollback — re-render the Quadlet at the prior version
+      become: true
+      ansible.builtin.template:
+        src: headscale.container.j2
+        dest: "{{ headscale_quadlet_dir }}/headscale.container"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Rollback — daemon-reload + restart headscale on the prior image
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ headscale_service }}"
+        state: restarted
+        daemon_reload: true
+
+    - name: Rollback — re-verify external reachability on the prior image
+      ansible.builtin.uri:
+        url: "{{ headscale_server_url }}/health"
+        method: GET
+        status_code: 200
+        timeout: 15
+      register: headscale_rollback_verify
+      until: headscale_rollback_verify is succeeded
+      retries: 6
+      delay: 5
+      # NOT failed_when:false — that makes `until … is succeeded` true on attempt 1,
+      # so the retry loop never runs and the outcome below fires on a single
+      # premature probe (false "still DOWN" ~20s before the prior image is serving).
+      # ignore_errors lets the retries actually run, then still reach the outcome
+      # message if they exhaust. See plan 26 (review S1).
+      ignore_errors: true
+
+    - name: Rollback — fail loudly with the outcome
+      ansible.builtin.fail:
+        msg: >-
+          {% if headscale_rollback_verify.status | default(0) == 200 %}
+          Headscale upgrade FAILED verification — auto-rolled-back to the prior
+          known-good version '{{ headscale_prior_version }}', which is now
+          serving (HTTP 200). The version pin in defaults still points at the
+          BROKEN target; fix it before re-running. Nothing was left down.
+          {% else %}
+          Headscale upgrade FAILED verification AND the rollback to
+          '{{ headscale_prior_version }}' did NOT restore external health
+          (got {{ headscale_rollback_verify.status | default('no response') }}).
+          Headscale is likely DOWN — manual intervention required NOW:
+          journalctl -u headscale; podman logs headscale. If the failed version ran a
+          forward-only schema migration, the prior binary cannot read the migrated DB
+          — restore the pre-upgrade snapshot: systemctl stop headscale ;
+          rm -f {{ headscale_data_dir }}/db.sqlite-wal {{ headscale_data_dir }}/db.sqlite-shm ;
+          cp -a {{ headscale_data_dir }}/db.sqlite.pre-upgrade {{ headscale_data_dir }}/db.sqlite ;
+          chown {{ headscale_container_uid }}:{{ headscale_container_gid }} {{ headscale_data_dir }}/db.sqlite ;
+          systemctl start headscale.
+          {% endif %}
+
+  always:
+    - name: Release deploy sentinel
+      become: true
+      ansible.builtin.file:
+        path: "{{ headscale_watchdog_deploy_lock }}"
+        state: absent
+      changed_when: false   # transient operational lock, not config drift
+
+# Watchdog install runs LAST — AFTER headscale is restarted + verified up — so the
+# timer (OnBootSec is already elapsed on a warm host, so it fires as soon as it is
+# started) never probes a not-yet-existing headscale mid-deploy and raises a false
+# "DOWN" alert + burns a repair slot on a fresh install. See plan 26 (review S4).
+- name: Deploy self-healing reachability watchdog
+  ansible.builtin.import_tasks: watchdog.yml
+  tags: [headscale, watchdog]

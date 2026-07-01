@@ -1,0 +1,377 @@
+#!/bin/bash
+# headscale-watchdog.sh — autonomous on-host self-heal for headscale reachability.
+# Deployed by Ansible (headscale role), triggered by headscale-watchdog.timer.
+# See plexarr plan 26.
+#
+# WHY THIS EXISTS: SSH to this host is tailnet-only (trusted firewalld zone =
+# tailscale0 + LAN); the tailnet needs headscale. If an upgrade/restart breaks
+# headscale while the operator is off-LAN, recovery would need SSH -> tailnet ->
+# headscale (circular). So this on-host actor is the ONLY thing that can recover
+# it without the operator reaching the box.
+#
+# DETERMINISTIC ONLY. No LLM/API call: the watchdog fires precisely when the
+# network is broken, so anything that needs the network to run is worthless here.
+#
+# Managed by Ansible — do not edit on the host.
+set -uo pipefail
+
+# ── Config (rendered) ────────────────────────────────────────────────
+EXTERNAL_URL="{{ headscale_server_url }}/health"
+HEADSCALE_CTR="headscale"
+TRAEFIK_CTR="{{ headscale_watchdog_traefik_container }}"
+SERVER_IP="{{ headscale_host_ip }}"
+TRUSTED_GW="{{ headscale_watchdog_trusted_gateway }}"
+RELOAD_CTRS="{{ headscale_watchdog_reload_containers }}"
+TRAEFIK_RESTART_ENABLED="{{ headscale_watchdog_traefik_restart_enabled | ternary('1', '0') }}"
+CONFIRM_PROBES={{ headscale_watchdog_confirm_probes }}
+CONFIRM_GAP={{ headscale_watchdog_confirm_gap }}
+PROBE_TIMEOUT={{ headscale_watchdog_probe_timeout }}
+REPAIR_CAP={{ headscale_watchdog_repair_cap }}
+REPAIR_WINDOW={{ headscale_watchdog_repair_window }}
+BACKOFF_INTERVAL={{ headscale_watchdog_backoff_interval }}
+DEPLOY_LOCK="{{ headscale_watchdog_deploy_lock }}"
+DEPLOY_LOCK_MAX_AGE={{ headscale_watchdog_deploy_lock_max_age }}
+NOTIFY_BIN="{{ headscale_watchdog_notify_bin }}"
+ALERT_EMAIL="{{ headscale_watchdog_alert_email }}"
+STATE_DIR="/var/lib/headscale-watchdog"
+STATE_FILE="$STATE_DIR/state.json"
+HOSTNAME_S="$(hostname -s 2>/dev/null || echo host)"
+ALERT_DEDUP_WINDOW={{ headscale_watchdog_alert_dedup_window }}
+# Host portion of EXTERNAL_URL (no scheme/port/path) — for the local differential
+# probe below. Rendered once from the same source of truth as the external probe.
+PROBE_FQDN="$(printf '%s' "$EXTERNAL_URL" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')"
+
+log() { logger -t headscale-watchdog -- "$*"; echo "[headscale-watchdog] $*" >&2; }
+
+# Bound every podman/nsenter call. A hung podman daemon or netns op must NOT
+# wedge this oneshot — a wedged run blocks the next timer fire, so the watchdog
+# would silently die exactly when it's needed. TimeoutStartSec in the .service is
+# the universal backstop; these fast-fail so RECOVERY can proceed instead of
+# waiting the whole start-timeout out. See plan 26 (review finding 7).
+PODMAN()  { timeout 15 podman "$@"; }
+NSENTER() { timeout 10 nsenter "$@"; }
+
+# ── Probes ───────────────────────────────────────────────────────────
+# External end-to-end probe. Echoes curl's exit code (0 = HTTP 2xx/3xx health OK).
+probe_external() {
+    curl -fsS -o /dev/null --max-time "$PROBE_TIMEOUT" "$EXTERNAL_URL" >/dev/null 2>&1
+    echo $?
+}
+
+# Locally-originated probe of Traefik's OWN https entrypoint, pinned to the host's
+# published port (SERVER_IP:443) with correct SNI via --resolve (so sniStrict still
+# matches). Locally-generated traffic traverses netavark's OUTPUT DNAT, so this
+# DIES exactly when a firewalld reload wipes the published-port rules (our layer —
+# rung 1 repairs it) but SUCCEEDS during a true WAN/uplink outage (the packet never
+# leaves the box). It is what distinguishes "netavark/proxy rules wiped" (local
+# also transport-fails → repair) from "ISP down" (local still 200 → alert only) —
+# the two are indistinguishable to the external probe alone, and the old WAN-excuse
+# would have suppressed rung 1 in the netavark-wipe family. Returns 0 on HTTP
+# 2xx/3xx. See plan 26 (review finding B1).
+probe_local_ok() {
+    curl -fsS -o /dev/null --max-time "$PROBE_TIMEOUT" \
+        --resolve "${PROBE_FQDN}:443:${SERVER_IP}" "https://${PROBE_FQDN}/health" >/dev/null 2>&1
+}
+
+# curl SSL/TLS-family exit codes — a cert/handshake failure, NOT routing.
+# Restarts can't fix these, so we alert and abort the fix ladder.
+is_tls_error() {
+    case "$1" in
+        35|51|53|54|58|59|60|64|66|77|80|82|83|90|91) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# curl exit codes where NO HTTP transaction completed — the transport itself
+# failed (6 DNS, 7 connect-refused, 28 timeout). These are the ONLY codes
+# consistent with an upstream/WAN fault, so ONLY these may be excused as "WAN"
+# (= suppress repair). Deliberately EXCLUDES 22: `curl -f` returns 22 on an HTTP
+# 4xx/5xx — e.g. a Traefik 502/504 when it cannot reach the headscale backend.
+# That HTTP error PROVES Traefik answered, so the fault is BEHIND the proxy (our
+# routing / dropped-netavark layer) and MUST run the fix ladder. Excusing a 502
+# as "WAN" was the hole that would leave us locked out in the exact netavark-drop
+# scenario rung 1 (network-reload) repairs. See plan 26 (review finding 1).
+is_transport_error() {
+    case "$1" in
+        6|7|28) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Confirmed failure: probe up to CONFIRM_PROBES times, CONFIRM_GAP apart. Returns
+# 0 (and sets LAST_CODE=0) the instant any probe succeeds (healthy/recovered);
+# otherwise returns 1 with LAST_CODE = the final curl exit code.
+LAST_CODE=0
+confirmed_failure() {
+    local i code
+    for (( i=1; i<=CONFIRM_PROBES; i++ )); do
+        code=$(probe_external)
+        if [[ "$code" == "0" ]]; then LAST_CODE=0; return 1; fi
+        LAST_CODE="$code"
+        (( i < CONFIRM_PROBES )) && sleep "$CONFIRM_GAP"
+    done
+    return 0
+}
+
+headscale_up() {
+    # IP-independent: container running AND its own healthcheck passes. Do NOT
+    # probe the hardcoded LAN IP (a DHCP change would false-positive).
+    PODMAN ps --filter "name=^${HEADSCALE_CTR}$" --filter status=running -q | grep -q . || return 1
+    PODMAN healthcheck run "$HEADSCALE_CTR" >/dev/null 2>&1
+}
+
+traefik_up() {
+    PODMAN ps --filter "name=^${TRAEFIK_CTR}$" --filter status=running -q | grep -q . || return 1
+    local st
+    st=$(PODMAN inspect --format '{{ "{{" }}.State.Health.Status{{ "}}" }}' "$TRAEFIK_CTR" 2>/dev/null || echo "")
+    # 'starting' = mid-boot; treat as up so the ladder doesn't restart a proxy that
+    # is still coming up. Empty = no healthcheck defined -> treat running as ok.
+    [[ "$st" == "healthy" || "$st" == "starting" || -z "$st" ]]
+}
+
+# Does Traefik egress toward the headscale hairpin via the trusted bridge?
+# If yes (+ Traefik healthy) but external is down, the fault is upstream (WAN),
+# not our routing — so we must NOT restart anything.
+egress_trusted() {
+    local pid route
+    pid=$(PODMAN inspect --format '{{ "{{" }}.State.Pid{{ "}}" }}' "$TRAEFIK_CTR" 2>/dev/null || echo "")
+    [[ -n "$pid" && "$pid" != "0" ]] || return 1
+    route=$(NSENTER -t "$pid" -n ip route get "$SERVER_IP" 2>/dev/null | head -1 || echo "")
+    [[ "$route" == *"via ${TRUSTED_GW} "* ]]
+}
+
+# ── Deploy-collision guard ───────────────────────────────────────────
+deploy_active() {
+    [[ -f "$DEPLOY_LOCK" ]] || return 1
+    local age now mt
+    now=$(date +%s); mt=$(stat -c %Y "$DEPLOY_LOCK" 2>/dev/null || echo 0)
+    age=$(( now - mt ))
+    (( age <= DEPLOY_LOCK_MAX_AGE ))   # fresh lock = active deploy; stale = ignore
+}
+
+# ── Anti-thrash state (rolling repair window) ────────────────────────
+# The backoff is only as trustworthy as this file. A silently-corrupted state
+# file (partial write, disk-full) would make the readers fall back to 0, so
+# backoff would never engage and the ladder could thrash. So validate-or-reset on
+# every write and verify the write actually landed. RESET, never abort: a broken
+# counter must not DISABLE recovery — losing some backoff history is safe, losing
+# the ability to restart headscale when locked out is not. See plan 26 (finding 5).
+state_valid() { jq -e . "$STATE_FILE" >/dev/null 2>&1; }
+ensure_state() {
+    mkdir -p "$STATE_DIR"
+    { [[ -f "$STATE_FILE" ]] && state_valid; } || echo '{"repairs":[]}' > "$STATE_FILE"
+}
+repairs_in_window() {
+    local now cutoff
+    now=$(date +%s); cutoff=$(( now - REPAIR_WINDOW ))
+    [[ -f "$STATE_FILE" ]] || { echo 0; return; }
+    jq --argjson c "$cutoff" '[.repairs[]? | select(. >= $c)] | length' "$STATE_FILE" 2>/dev/null || echo 0
+}
+last_repair_ts() {
+    [[ -f "$STATE_FILE" ]] || { echo 0; return; }
+    jq '(.repairs // []) | max // 0' "$STATE_FILE" 2>/dev/null || echo 0
+}
+record_repair() {
+    local now cutoff
+    now=$(date +%s); cutoff=$(( now - REPAIR_WINDOW ))
+    ensure_state
+    if jq --argjson n "$now" --argjson c "$cutoff" \
+        '.repairs = ([(.repairs[]? | select(. >= $c)), $n])' \
+        "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null && [[ -s "${STATE_FILE}.tmp" ]]; then
+        mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    else
+        # jq failed or produced nothing — don't leave the counter unwritten (that
+        # would silently defeat backoff). Reset to a single-entry history so this
+        # very repair still counts.
+        rm -f "${STATE_FILE}.tmp"
+        log "state write failed — resetting repair history (this repair still counted)"
+        echo "{\"repairs\":[$now]}" > "$STATE_FILE"
+    fi
+}
+
+# In backoff (too many recent repairs) we still probe + alert every interval but
+# only ATTEMPT a repair once per BACKOFF_INTERVAL — no hammering restarts.
+repair_allowed() {
+    local n last now
+    n=$(repairs_in_window)
+    (( n < REPAIR_CAP )) && return 0
+    last=$(last_repair_ts); now=$(date +%s)
+    (( now - last >= BACKOFF_INTERVAL ))
+}
+
+# ── Alerting (best-effort; journal is the durable local record) ──────
+# Push-channel dedup: the journal ALWAYS records every alert, but a multi-hour
+# outage must not push an email/ntfy every 2 minutes — alert fatigue is fatal for a
+# lockout tool, and queued mail floods on recovery. Recovery alerts (✅) always
+# push; a repeating outage CLASS (subject minus its "— host" suffix) pushes at most
+# once per ALERT_DEDUP_WINDOW. State lives in the existing state.json. See plan 26 (S9).
+alert_throttled() {
+    local cls="$1" now last
+    now=$(date +%s)
+    last=$(jq -r --arg c "$cls" '.alerts[$c] // 0' "$STATE_FILE" 2>/dev/null || echo 0)
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    (( now - last < ALERT_DEDUP_WINDOW ))
+}
+record_alert() {
+    local cls="$1" now; now=$(date +%s); ensure_state
+    jq --arg c "$cls" --argjson n "$now" '.alerts = ((.alerts // {}) + {($c): $n})' \
+        "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "$STATE_FILE" || rm -f "${STATE_FILE}.tmp"
+}
+alert() {
+    local subject="$1" body="$2"
+    log "ALERT: ${subject} :: ${body}"   # journal: durable local record, always
+    # Time-bounded pushes: a slow/hung MTA or ntfy endpoint must not wedge the
+    # oneshot (see the PODMAN/NSENTER note). Deduped per class except recovery.
+    local cls="${subject% — *}"          # strip the trailing " — host" -> stable class
+    case "$subject" in
+        *✅*) : ;;                          # recovery — always push
+        *) if alert_throttled "$cls"; then return 0; fi; record_alert "$cls" ;;
+    esac
+    [[ -n "$ALERT_EMAIL" ]] && printf '%b\n' "$body" | timeout 20 mail -s "$subject" "$ALERT_EMAIL" 2>/dev/null || true
+    [[ -x "$NOTIFY_BIN" ]] && timeout 20 "$NOTIFY_BIN" --title "$subject" --priority high --tags warning "$body" 2>/dev/null || true
+}
+
+# Restart a systemd unit, clearing a tripped start-limit first. A fail-to-start
+# loop (RestartSec + fast failure) trips StartLimitBurst in ~2-3 min, after which
+# systemd REJECTS every restart ("start request repeated too quickly") until
+# reset-failed — otherwise the watchdog's restart rungs can never recover a unit
+# whose original fault has since cleared (e.g. a boot-order transient where /mnt
+# mounted late). Bounded so a wedged restart can't hang the oneshot. See plan 26 (S2).
+svc_restart() {
+    local unit="$1"
+    systemctl reset-failed "$unit" 2>/dev/null || true
+    timeout 90 systemctl restart "$unit"
+}
+
+# ── Fix ladder ───────────────────────────────────────────────────────
+# Each rung: bail if a deploy grabbed the lock (TOCTOU close), run the action,
+# give it a moment, re-probe external. Return 0 the instant external recovers.
+STEPS_TAKEN=""
+try_step() {
+    local name="$1"; shift
+    # A deploy that just grabbed the lock now OWNS headscale — stand down cleanly
+    # and COMPLETELY (exit 0, not `return 2`). Returning 2 read as false by the
+    # caller, which would fall through the whole ladder to a bogus "repairs
+    # exhausted" DOWN alert while STEPS_TAKEN stayed empty. See plan 26 (finding 4).
+    if deploy_active; then log "deploy in progress — standing down at '$name'"; exit 0; fi
+    log "repair: $name"
+    STEPS_TAKEN="${STEPS_TAKEN}${STEPS_TAKEN:+, }$name"
+    "$@" >/dev/null 2>&1 || log "  (step '$name' returned non-zero)"
+    sleep 5
+    [[ "$(probe_external)" == "0" ]]
+}
+
+run_ladder() {
+    # Re-check for a deploy BEFORE record_repair so the common "a deploy started
+    # between main()'s check and here" race neither burns a backoff slot nor ends
+    # in a false DOWN alert — just defer, the deploy owns it. See plan 26 (finding 4).
+    if deploy_active; then log "deploy in progress — deferring fix ladder"; exit 0; fi
+    record_repair
+    # Rung 1: re-add netavark rules a firewalld reload may have dropped. Scoped
+    # to the two affected containers, never --all (would flap all containers).
+    # shellcheck disable=SC2086
+    if try_step "network-reload ($RELOAD_CTRS)" PODMAN network reload $RELOAD_CTRS; then
+        alert "✅ headscale recovered — ${HOSTNAME_S}" "External health restored after: ${STEPS_TAKEN}."; return 0
+    fi
+    # Rung 2: restart Traefik (brief all-services blip). Safe ONLY with the
+    # LOCAL crowdsec plugin (plan 26 A3) — a remote plugin would re-fetch from
+    # plugins.traefik.io mid-outage and 404 everything. Gated by a flag. Bounded
+    # so a wedged restart can't hang the oneshot past the next timer fire.
+    if [[ "$TRAEFIK_RESTART_ENABLED" == "1" ]]; then
+        if try_step "restart-traefik" svc_restart "${TRAEFIK_CTR}.service"; then
+            alert "✅ headscale recovered — ${HOSTNAME_S}" "External health restored after: ${STEPS_TAKEN}."; return 0
+        fi
+    else
+        log "traefik-restart rung DISABLED (headscale_watchdog_traefik_restart_enabled=false)"
+    fi
+    # Rung 3: full cycle.
+    if try_step "restart-headscale" timeout 90 systemctl restart "${HEADSCALE_CTR}.service"; then
+        alert "✅ headscale recovered — ${HOSTNAME_S}" "External health restored after: ${STEPS_TAKEN}."; return 0
+    fi
+    return 1
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+main() {
+    ensure_state   # mkdir + validate/reset a corrupt state file up front
+
+    if ! confirmed_failure; then
+        exit 0   # healthy (or recovered on the confirm probe)
+    fi
+
+    # Persistent external failure. Classify before acting.
+    if is_tls_error "$LAST_CODE"; then
+        alert "⚠️ headscale TLS/cert failure — ${HOSTNAME_S}" \
+            "External probe to ${EXTERNAL_URL} failed with curl code ${LAST_CODE} (TLS/handshake). A restart cannot fix a cert; check ACME/cert renewal. Fix ladder NOT run."
+        exit 0
+    fi
+
+    if deploy_active; then
+        log "external down but a deploy is in progress — deferring (probe+log only)"
+        exit 0
+    fi
+
+    # Layer A: is headscale itself down?
+    if ! headscale_up; then
+        log "headscale container unhealthy/stopped — restarting it"
+        if ! repair_allowed; then
+            alert "⚠️ headscale flapping — ${HOSTNAME_S}" \
+                "headscale down again within backoff window ($(repairs_in_window) repairs / ${REPAIR_WINDOW}s). Holding restarts to every ${BACKOFF_INTERVAL}s. Investigate the container (bad image? crash loop?)."
+            exit 0
+        fi
+        # Re-check for a deploy before recording (mirrors run_ladder): a deploy
+        # that started since main()'s check owns headscale — don't burn a slot.
+        if deploy_active; then log "deploy in progress — deferring headscale restart"; exit 0; fi
+        record_repair
+        if try_step "restart-headscale" svc_restart "${HEADSCALE_CTR}.service"; then
+            alert "✅ headscale recovered — ${HOSTNAME_S}" "headscale container restarted; external health restored."
+        else
+            alert "🚨 headscale DOWN — ${HOSTNAME_S}" \
+                "headscale container restart did NOT restore external health (curl ${LAST_CODE}). Manual intervention required. journalctl -u headscale."
+        fi
+        exit 0
+    fi
+
+    # Layer B: headscale up, external down. Our-layer vs WAN/ISP?
+    # ONLY excuse as WAN when the probe failed at the TRANSPORT (curl 6/7/28: no
+    # HTTP response) AND Traefik is healthy AND egressing via the trusted bridge.
+    # An HTTP error (curl 22 = Traefik 502/504, backend unreachable) proves Traefik
+    # answered, so the fault is OUR layer — fall through to the ladder (rung 1 =
+    # network-reload re-adds dropped netavark rules) instead of blaming the WAN.
+    # This is the netavark-drop lockout hole the old unconditional check left open.
+    # See plan 26 (review finding 1).
+    if is_transport_error "$LAST_CODE" && traefik_up && egress_trusted; then
+        # Differential probe: a LOCALLY-originated request to Traefik's own entrypoint
+        # traverses netavark's OUTPUT DNAT. If it ALSO transport-fails, the
+        # published-port rules were wiped (the firewalld-reload footgun) — OUR layer,
+        # which rung 1 (network-reload) repairs — so fall through to the ladder
+        # instead of blaming the WAN. Only excuse as WAN when the local probe still
+        # returns 200: the box is serving, so the fault is genuinely upstream and no
+        # restart can fix it. Without this, the most common local failure family was
+        # misfiled as ISP and left unrepaired. See plan 26 (review finding B1).
+        if probe_local_ok; then
+            alert "⚠️ headscale unreachable — likely WAN/ISP — ${HOSTNAME_S}" \
+                "External ${EXTERNAL_URL} down (curl ${LAST_CODE} — transport/connect failure, no HTTP response) but headscale healthy, Traefik healthy, egress to ${SERVER_IP} via the trusted bridge (${TRUSTED_GW}), AND a local probe of Traefik's entrypoint still returns 200. The box is serving; the fault is upstream (uplink/DNS/router) — NOT restarting anything (a restart can't fix an ISP outage)."
+            exit 0
+        fi
+        log "external transport-failed AND the local entrypoint probe also failed — published-port/netavark rules look wiped (our layer), running fix ladder"
+        # fall through to the ladder below (do NOT exit)
+    fi
+
+    # Our proxy/routing layer is the fault (the 2026-07-01 incident class).
+    if ! repair_allowed; then
+        alert "⚠️ headscale flapping — ${HOSTNAME_S}" \
+            "Proxy/routing repair suppressed by backoff ($(repairs_in_window) repairs / ${REPAIR_WINDOW}s). Still probing+alerting every interval; next repair attempt allowed after ${BACKOFF_INTERVAL}s since the last. Investigate Traefik/routing."
+        exit 0
+    fi
+
+    log "headscale up but external down + Traefik/routing suspect — running fix ladder"
+    if run_ladder; then
+        exit 0
+    fi
+    alert "🚨 headscale DOWN — deterministic repairs exhausted — ${HOSTNAME_S}" \
+        "External ${EXTERNAL_URL} still down (curl ${LAST_CODE}) after: ${STEPS_TAKEN:-<none>}. Manual intervention required. Check: podman ps; journalctl -u ${TRAEFIK_CTR}; journalctl -u ${HEADSCALE_CTR}."
+    exit 0
+}
+
+main "$@"

@@ -72,7 +72,17 @@ headscale_trusted_network: "10.88.0.0/16"
 # reverse proxy is multi-homed: with several equal-metric default routes it may
 # egress toward the host from a secondary container network whose source IP
 # falls outside headscale_trusted_network. The DROP would then block it —
-# observed as the proxy returning 504 on the headscale route. Default empty.
+# observed as the proxy returning 504/timeout on the headscale route.
+#
+# NOTE (2026-07-01): the primary guard for this is now on the PLEXARR side —
+# the Traefik proxy networks carry Options=metric=200 so Traefik always egresses
+# via the main bridge (10.88.0.0/16 = headscale_trusted_network), never a proxy
+# subnet. This deployment still sets group_vars → ["10.91.0.0/24"] as
+# belt-and-suspenders (defense-in-depth if that metric ever regresses; a
+# 2026-07-01 incident where Traefik egress landed on the UNtrusted 10.92 proxy
+# net took headscale down). Kept intentionally; harmless and the fallback is
+# cheap. Role default stays empty so a fresh headscale elsewhere trusts no proxy
+# subnet by default. See plexarr plan 26.
 headscale_trusted_proxy_networks: []
 
 # ko-app distroless nonroot user. Must match the image's runtime UID/GID.
@@ -87,3 +97,56 @@ headscale_ui_version: "2026.03.17"
 headscale_ui_image: "ghcr.io/gurucomputing/headscale-ui"
 headscale_ui_domain: ""
 headscale_ui_host_port: 3000
+
+# ── Self-healing watchdog ────────────────────────────────────────────
+# On-host systemd timer that probes headscale reachability and applies a
+# DETERMINISTIC repair when it's down but fixable. This is the operator's
+# remote-lockout insurance: SSH to this host is tailnet-only, the tailnet needs
+# headscale, so if an upgrade/restart breaks headscale while the operator is
+# off-LAN, only an autonomous on-host actor can recover it. See plexarr plan 26.
+# No LLM/API — the watchdog must work when the network is down.
+headscale_watchdog_enabled: true
+# Timer cadence (fast — connectivity is critical). OnBootSec == OnUnitActiveSec.
+headscale_watchdog_interval: "2min"
+# In-run confirm: N probes CONFIRM_GAP seconds apart must all fail before acting
+# (debounces transients + normal in-flight restarts).
+headscale_watchdog_confirm_probes: 2
+headscale_watchdog_confirm_gap: 15
+# curl --max-time per probe.
+headscale_watchdog_probe_timeout: 10
+# Plexarr integration points (this host co-hosts the plexarr Traefik stack).
+headscale_watchdog_traefik_container: "traefik"
+# The trusted bridge gateway Traefik SHOULD egress through to reach the
+# headscale hairpin (== headscale_trusted_network's gateway). Used to tell
+# "our-layer broken" from "WAN/ISP down".
+headscale_watchdog_trusted_gateway: "10.88.0.1"
+# Containers whose netavark firewall rules get reloaded in the fix ladder
+# (NOT --all — that would flap all ~23 containers).
+headscale_watchdog_reload_containers: "traefik headscale"
+# The Traefik-restart rung. GATED + restrictive default (false): a watchdog Traefik
+# restart is safe ONLY once the CrowdSec plugin is a LOCAL plugin (plexarr A3/plan
+# 26), verified to cold-start with plugins.traefik.io blackholed — otherwise a
+# restart during an outage re-fetches the plugin, fails, and 404s the whole stack.
+# That is a property of the co-hosted plexarr deployment, NOT of a fresh headscale
+# host, so the default is OFF and this repo's group_vars flips it on (mirrors the
+# headscale_trusted_proxy_networks restrictive-default convention).
+headscale_watchdog_traefik_restart_enabled: false
+# Anti-thrash: after this many repairs within the rolling window, back off —
+# keep probing + alerting every interval, but only attempt a repair every
+# headscale_watchdog_backoff_interval seconds (don't hammer restarts).
+headscale_watchdog_repair_cap: 3
+headscale_watchdog_repair_window: 3600
+headscale_watchdog_backoff_interval: 900
+# Deploy-collision guard: skip FIX actions (still probe+log) when a deploy holds
+# this sentinel and it's fresher than max_age (stale = crashed deploy, ignored).
+headscale_watchdog_deploy_lock: "/run/plexarr-deploy.lock"
+headscale_watchdog_deploy_lock_max_age: 1800
+# Alerting. ntfy push is best-effort (needs network); email is the durable
+# record; journal (logger) is the always-local record.
+headscale_watchdog_notify_bin: "/usr/local/bin/plexarr-notify.sh"
+headscale_watchdog_alert_email: "{{ headscale_admin_email | default('') }}"
+# Push-channel alert dedup window (seconds): a repeating outage alert class pushes
+# email/ntfy at most once per this interval (journal still records every run), so a
+# multi-hour outage doesn't fire a push every timer tick — alert fatigue is fatal
+# for a lockout tool. See plan 26 (S9).
+headscale_watchdog_alert_dedup_window: 3600

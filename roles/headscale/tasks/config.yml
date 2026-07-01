@@ -7,4 +7,7 @@
     owner: "65532"
     group: "65532"
     mode: "0600"
-  notify: Restart headscale
+  # No notify: the restart is an EXPLICIT, rescuable task in main.yml gated on this
+  # register (see there). A handler restart fires during flush_handlers, whose
+  # failure is NOT caught by the rollback rescue. See plan 26 (finding: fail-to-start).
+  register: headscale_config_render

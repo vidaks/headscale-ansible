@@ -1,0 +1,46 @@
+---
+# Deterministic on-host self-heal for headscale reachability. See plexarr plan 26.
+# The operator's remote-SSH path is tailnet-only -> depends on headscale, so an
+# upgrade that breaks headscale while the operator is off-LAN can only be
+# recovered by something running ON the host. This is that something.
+
+- name: Watchdog — install self-heal script
+  become: true
+  ansible.builtin.template:
+    src: headscale-watchdog.sh.j2
+    # /usr/local/bin is bin_t — a system oneshot can exec it. (Under a
+    # container-labeled config dir it would be container_file_t -> 203/EXEC.)
+    dest: /usr/local/bin/headscale-watchdog.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Watchdog — create state directory
+  become: true
+  ansible.builtin.file:
+    path: /var/lib/headscale-watchdog
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Watchdog — deploy systemd service + timer
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - headscale-watchdog.service
+    - headscale-watchdog.timer
+
+- name: Watchdog — enable and start the timer
+  become: true
+  ansible.builtin.systemd:
+    name: headscale-watchdog.timer
+    state: "{{ 'started' if headscale_watchdog_enabled | bool else 'stopped' }}"
+    enabled: "{{ headscale_watchdog_enabled | bool }}"
+    daemon_reload: true
+  ignore_errors: "{{ ansible_check_mode }}"

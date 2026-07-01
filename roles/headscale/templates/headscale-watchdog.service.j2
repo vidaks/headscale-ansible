@@ -1,0 +1,21 @@
+# Headscale reachability watchdog — deterministic on-host self-heal.
+# Managed by Ansible (headscale role). See plexarr plan 26.
+[Unit]
+Description=Headscale reachability watchdog (deterministic self-heal)
+After=network-online.target headscale.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: needs podman (rootful containers), systemctl, nsenter.
+ExecStart=/usr/local/bin/headscale-watchdog.sh
+# Backstop against a wedged run. The script bounds its own podman/nsenter/mail
+# calls with `timeout`, but this catches anything else that could hang (a stuck
+# systemctl job, a kernel-side netns stall): kill the run rather than let a
+# oneshot block every future timer fire — a silently-dead watchdog is the worst
+# outcome for a lockout tool. 360s clears the legitimate worst case (confirm
+# probes + a full three-rung ladder with two 90s bounded restarts ≈ 275s) with
+# headroom, so a real repair is never killed mid-restart. See plan 26 (finding 7).
+TimeoutStartSec=360
+# The script handles its own alerting and exits 0 on every handled path, so a
+# non-zero exit here means the script itself crashed — surface it in the journal.

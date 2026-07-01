@@ -7,4 +7,6 @@
     owner: "65532"
     group: "65532"
     mode: "0600"
-  notify: Restart headscale
+  # No notify — see config.yml. The restart is an explicit rescuable task gated on
+  # this register. See plan 26 (finding: fail-to-start not rescued via handler).
+  register: headscale_acl_render

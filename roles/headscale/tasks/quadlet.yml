@@ -1,4 +1,10 @@
 ---
+# Render ONLY here. The daemon-reload + restart + enable/start deliberately live
+# in main.yml's rollback-protected block as EXPLICIT tasks (gated on this
+# register), NOT a handler flushed here: a handler restart that fails to start the
+# container aborts during flush_handlers, which the rollback rescue does NOT catch
+# — so a fail-to-start upgrade would strand headscale on the bad image with no
+# auto-rollback. See plan 26 (finding: fail-to-start not rescued).
 - name: Quadlet — deploy headscale container unit
   become: true
   ansible.builtin.template:
@@ -7,21 +13,4 @@
     owner: root
     group: root
     mode: "0600"
-  notify: Restart headscale
-
-# Flush handlers immediately so daemon-reload + restart happen BEFORE the
-# enable/start task below. Without the flush, enable/start would run against
-# whatever podman-system-generator emitted on the previous boot, missing any
-# changes from this apply.
-- name: Quadlet — flush handlers (daemon-reload + restart if unit changed)
-  ansible.builtin.meta: flush_handlers
-
-- name: Quadlet — enable and start headscale service
-  become: true
-  ansible.builtin.systemd:
-    name: "{{ headscale_service }}"
-    state: started
-    enabled: true
-  # In check mode on first install the Quadlet file hasn't been written yet,
-  # so systemd doesn't know the service. Safe to ignore in check mode only.
-  ignore_errors: "{{ ansible_check_mode }}"
+  register: headscale_quadlet_render
