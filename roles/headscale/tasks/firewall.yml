@@ -116,3 +116,68 @@
   loop: "{{ headscale_fw_proxy_permanent_check.results }}"
   when: item.rc != 0
   changed_when: true
+
+# The add tasks above are add-only: de-listing a subnet from
+# headscale_trusted_proxy_networks left its RETURN exception live forever
+# (found 2026-07-04 when 10.91 was de-listed after plexarr made its proxy
+# networks routeless). Reconcile: enumerate the live priority-9 RETURN
+# exceptions for THIS daddr:dport (the -d filter keeps rules owned by any
+# other deployment out of the sweep) and remove any whose source is no
+# longer listed. Steady state (nothing to remove) is an empty loop →
+# changed=0. The get-rules line format is `9 -p tcp -d <ip> --dport <port>
+# -s <cidr> -j RETURN` — the leading priority token slots directly after
+# PREROUTING in the remove command. The DROP rule sits at priority 10 with
+# `! -s`, so the `^9 ` + `-j RETURN` selection can never touch it.
+- name: Firewall — enumerate proxy-network exceptions (runtime)
+  become: true
+  ansible.builtin.command: firewall-cmd --direct --get-rules ipv4 mangle PREROUTING
+  register: headscale_fw_direct_rules_runtime
+  changed_when: false
+
+- name: Firewall — remove de-listed proxy-network exceptions (runtime)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --direct --remove-rule ipv4 mangle PREROUTING {{ item }}
+  loop: >-
+    {{ headscale_fw_direct_rules_runtime.stdout_lines
+       | select('match', '^9 ')
+       | select('search', '-j RETURN')
+       | select('search', '-d ' ~ headscale_host_ip ~ ' ')
+       | select('search', '--dport ' ~ headscale_host_port)
+       | reject('search', '-s (' ~ (headscale_trusted_proxy_networks | map('regex_escape') | join('|')) ~ ')')
+       | list
+       if headscale_trusted_proxy_networks | length > 0 else
+       headscale_fw_direct_rules_runtime.stdout_lines
+       | select('match', '^9 ')
+       | select('search', '-j RETURN')
+       | select('search', '-d ' ~ headscale_host_ip ~ ' ')
+       | select('search', '--dport ' ~ headscale_host_port)
+       | list }}
+  changed_when: true
+
+- name: Firewall — enumerate proxy-network exceptions (permanent)
+  become: true
+  ansible.builtin.command: firewall-cmd --permanent --direct --get-rules ipv4 mangle PREROUTING
+  register: headscale_fw_direct_rules_permanent
+  changed_when: false
+
+- name: Firewall — remove de-listed proxy-network exceptions (permanent)
+  become: true
+  ansible.builtin.command: >-
+    firewall-cmd --permanent --direct --remove-rule ipv4 mangle PREROUTING {{ item }}
+  loop: >-
+    {{ headscale_fw_direct_rules_permanent.stdout_lines
+       | select('match', '^9 ')
+       | select('search', '-j RETURN')
+       | select('search', '-d ' ~ headscale_host_ip ~ ' ')
+       | select('search', '--dport ' ~ headscale_host_port)
+       | reject('search', '-s (' ~ (headscale_trusted_proxy_networks | map('regex_escape') | join('|')) ~ ')')
+       | list
+       if headscale_trusted_proxy_networks | length > 0 else
+       headscale_fw_direct_rules_permanent.stdout_lines
+       | select('match', '^9 ')
+       | select('search', '-j RETURN')
+       | select('search', '-d ' ~ headscale_host_ip ~ ' ')
+       | select('search', '--dport ' ~ headscale_host_port)
+       | list }}
+  changed_when: true
