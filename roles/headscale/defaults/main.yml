@@ -85,6 +85,14 @@ headscale_trusted_network: "10.88.0.0/16"
 # subnet by default. See plexarr plan 26.
 headscale_trusted_proxy_networks: []
 
+# DNS records served by MagicDNS to tailnet peers on top of the magic domain —
+# the split-DNS half of plexarr's internal-only routes (each entry points a
+# public hostname at this host's tailnet IP so tailnet devices reach Traefik
+# through the tunnel; the WAN path 403s at Traefik). {name, value, type?}
+# (type defaults to A). Empty by default: a fresh headscale serves no extra
+# names until the deployment opts in via group_vars.
+headscale_dns_extra_records: []
+
 # ko-app distroless nonroot user. Must match the image's runtime UID/GID.
 # Verified for ghcr.io/juanfont/headscale:0.29.0. Used by dirs.yml ownership
 # and the Quadlet User= directive — single source of truth.

@@ -64,7 +64,21 @@ dns:
       - {{ ns }}
 {% endfor %}
   search_domains: []
+{% if headscale_dns_extra_records | length > 0 %}
+  # Split DNS for internal-only plexarr routes: tailnet clients resolve these
+  # hostnames to this host's tailnet IP and reach Traefik through the tunnel,
+  # while the WAN path 403s at Traefik's internal-only ipAllowList. Pushed
+  # only to peers that accept DNS (tux itself runs --accept-dns=false, so the
+  # host's own resolution is untouched).
+  extra_records:
+{% for rec in headscale_dns_extra_records %}
+    - name: "{{ rec.name }}"
+      type: "{{ rec.type | default('A') }}"
+      value: "{{ rec.value }}"
+{% endfor %}
+{% else %}
   extra_records: []
+{% endif %}
 
 # Socket goes in the data dir (writable volume) since container is ReadOnly=true.
 unix_socket: {{ headscale_container_data_dir }}/headscale.sock
