@@ -64,6 +64,17 @@ headscale_ephemeral_node_inactivity_timeout: "30m"
 # Network allowed to reach headscale directly (container bridge).
 # Traffic from any other source is dropped in mangle PREROUTING, before DNAT.
 # Find the bridge subnet with: ip addr show podman0
+#
+# DELIBERATELY subnet-wide (reviewed 2026-07-05, external second opinion taken):
+# this trusts every container on the bridge, not just the reverse proxy — but
+# the proxy's bridge lease churns across restarts, a pinned /32 adds an
+# IPAM-collision failure mode to the ingress path (proxy fails to start), and a
+# dedicated single-member proxy subnet is a coordinated multi-surface change
+# across two repos, deferred to the co-hosted stack's class-wide firewalld
+# source-restriction work. The exposure is bounded: node auth is TS2021
+# node-key, joining needs an operator-minted pre-auth key. Full reasoning in
+# README "Trusted-network scope" and, for this deployment, the plexarr repo's
+# docs/security-residual-risks.md.
 headscale_trusted_network: "10.88.0.0/16"
 
 # Additional source networks permitted to reach the backend port, on top of

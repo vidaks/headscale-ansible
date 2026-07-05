@@ -10,6 +10,10 @@
 # (the container bridge) to headscale_host_ip:headscale_host_port, preventing
 # LAN devices from bypassing Traefik and CrowdSec.
 #
+# The exception is deliberately the WHOLE bridge subnet, not a proxy-only /32 —
+# a reviewed, accepted residual risk. See defaults/main.yml
+# (headscale_trusted_network) and README "Trusted-network scope".
+#
 # IPv4-only by design. The Quadlet PublishPort uses an IPv4 literal
 # (headscale_host_ip), so the container only listens on IPv4 — there is no
 # IPv6 listener to bypass. preflight.yml asserts headscale_host_ip is IPv4 to

@@ -223,6 +223,46 @@ Asserts:
 5. Default route is unchanged.
 6. `/etc/resolv.conf` checksum is unchanged.
 
+## Trusted-network scope (accepted residual risk)
+
+The mangle PREROUTING rule (`firewall.yml`) drops direct access to
+`headscale_host_ip:headscale_host_port` from everything except
+`headscale_trusted_network` — by default the whole container bridge
+(`10.88.0.0/16`), not just the reverse proxy. Every container on that bridge
+can therefore reach headscale's API directly, bypassing the proxy's L7
+defenses (CrowdSec, rate limiting).
+
+Reviewed 2026-07-05 and kept, with an external second opinion taken. The
+reasoning:
+
+- Only the reverse proxy legitimately dials this port from the bridge, but its
+  bridge IP is a dynamic netavark lease that churns across restarts. Pinning a
+  static IP and narrowing to a /32 trades a bounded exposure for an
+  IPAM-collision failure mode: if another container ever holds the pinned
+  address when the proxy restarts, the proxy fails to start and all ingress —
+  including this coordination server, the operator's remote-admin path — goes
+  down.
+- The clean mechanism is a dedicated single-member network for the proxy
+  (subnet-as-identity, no pinned address). That is a coordinated change across
+  every surface that enumerates the proxy's networks (firewalld trusted
+  sources, IP allowlists, watchdog gateway checks, validate assertions) and
+  belongs to the co-hosted stack's planned class-wide firewalld
+  source-restriction work, not to this repo alone. When it lands: add the new
+  subnet to `headscale_trusted_proxy_networks` first (priority-9 RETURN, so
+  there is no cutover outage), move the proxy, then flip
+  `headscale_trusted_network` to the new subnet.
+- The exposure is bounded meanwhile: node authentication is TS2021 (Noise,
+  node keys), registration requires an operator-minted high-entropy pre-auth
+  key, and the metrics port is loopback-only. What a compromised bridge
+  container gains is headscale's unauthenticated HTTP surface (health,
+  platform-config and registration endpoints) without L7 filtering — a real
+  but narrow CVE/DoS surface, and neighbor DoS is not actually prevented by
+  narrowing (co-tenants share the host's kernel and can flood the public route
+  through the proxy regardless).
+
+For this deployment the decision is also recorded in the plexarr repo's
+`docs/security-residual-risks.md`, next to the other accepted co-tenant risks.
+
 ## Rollback
 
 ```bash
