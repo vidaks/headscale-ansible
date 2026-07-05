@@ -234,6 +234,30 @@ sudo rm <headscale_traefik_dynamic_dir>/headscale.yml
 # Traefik hot-reloads and removes the headscale route automatically.
 ```
 
+## Backup and disaster recovery
+
+Tracked content lives on the private remote (`vidaks/headscale-ansible`, since
+2026-07-05; history scrubbed of personal data before first publish — keep real
+domains/IPs in `group_vars`, placeholders in tracked files). The gitignored
+files are the unrecoverable part: `group_vars/all/vars.yml` (split-DNS
+`dns.extra_records`, `magic_dns`, trusted proxy networks), `vault.yml`, and
+`inventory.ini` exist only on the host and in the plexarr stack's nightly
+gitignored-essentials bundle
+(`/mnt/data/backups/system/homelab-gitignored_<ts>.tar.gz`, 0600 root, newest
+7 kept). `.vault_pass` is in neither — it lives only in the operator's
+password manager.
+
+Restore: clone the private remote into `~/source/git/headscale`, untar the
+bundle over it, recreate `.vault_pass` from the password manager. Rebuild
+ordering relative to the plexarr stack (its internal-only routes are
+tailnet-dead until this repo is applied) is documented in
+`plexarr/docs/disaster-recovery.md` §6.
+
+Scope note: this covers the *repo*. Headscale's runtime state (the SQLite DB
+holding node registrations, under `/mnt/config/headscale/`) is a separate
+concern and is **not** in this bundle or the plexarr services backup — losing
+it means every tailnet device re-registers.
+
 ## Auth key rotation
 
 ```bash
