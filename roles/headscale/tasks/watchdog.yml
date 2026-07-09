@@ -1,5 +1,5 @@
 ---
-# Deterministic on-host self-heal for headscale reachability. See plexarr plan 26.
+# Deterministic on-host self-heal for headscale reachability.
 # The operator's remote-SSH path is tailnet-only -> depends on headscale, so an
 # upgrade that breaks headscale while the operator is off-LAN can only be
 # recovered by something running ON the host. This is that something.

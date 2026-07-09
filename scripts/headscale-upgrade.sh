@@ -54,7 +54,7 @@ declare -A VERSION_VAR=( [headscale]="headscale_version" )
 declare -A TRACK_MODE=(  [headscale]="minor" )
 COMPONENTS=(headscale)
 
-# ── Helpers (ported from plexarr-release-update.sh idioms) ──
+# ── Helpers ────────────────────────────────────────────────
 retry() { local n=0; until "$@"; do n=$((n+1)); ((n>=3)) && return 1; sleep 2; done; }
 
 # Recent stable release tags (prereleases/drafts excluded), v-stripped, desc.
@@ -211,4 +211,4 @@ fi
 echo
 echo "Upgrade complete and verified:"
 for c in "${TO_APPLY[@]}"; do echo "  $c ${ORIG[$c]} → ${AUTO[$c]}"; done
-echo "Review 'git diff' and commit when ready (this repo has no remote — nothing is pushed)."
+echo "Review 'git diff' and commit when ready (nothing is pushed by this script)."

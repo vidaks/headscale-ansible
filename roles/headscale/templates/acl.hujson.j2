@@ -13,7 +13,7 @@
       // Explicit 0.0.0.0/0 + ::/0 rather than "*": since 0.29 a "*" dst
       // resolves to tailnet ranges only, which would drop exit-node egress to
       // non-tailnet IPs. Explicit CIDR keeps full egress for this single-user
-      // tailnet (exit node through tux is a supported path).
+      // tailnet (exit node through an operator node is a supported path).
       "dst": ["0.0.0.0/0:*", "::/0:*"]
     }
   ],

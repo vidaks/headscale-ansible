@@ -7,4 +7,4 @@
 # headscale on the broken image with no auto-recovery (proven by a hello-world
 # fault-injection test: rescued=0). The restart is therefore an EXPLICIT,
 # change-gated, rescuable task inside the verify block in tasks/main.yml. Do NOT
-# reintroduce a `notify: Restart headscale` handler here. See plan 26.
+# reintroduce a `notify: Restart headscale` handler here.

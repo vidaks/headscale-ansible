@@ -6,7 +6,7 @@
 # jq: the watchdog's anti-thrash state machine reads/writes state.json at RUNTIME —
 # without it repairs_in_window silently returns 0, backoff never engages, and a
 # persistent fault thrash-restarts every interval. sqlite: consistent DB snapshots
-# for the rollback insurance in the block below. Both idempotent. See plan 26 (S3 + B2).
+# for the rollback insurance in the block below. Both idempotent.
 - name: Install watchdog + rollback host dependencies
   become: true
   ansible.builtin.dnf:
@@ -20,7 +20,7 @@
 # a version bump that fails verification can auto-roll-back to the known-good
 # tag. The watchdog can restart headscale but cannot downgrade a broken image —
 # this closes that gap. Empty on a fresh install (no prior) → rollback is a
-# no-op and a bad first deploy just fails loudly. See plan 26 (D6).
+# no-op and a bad first deploy just fails loudly.
 - name: Capture the currently-running headscale image tag (rollback anchor)
   become: true
   ansible.builtin.command: podman inspect --type container headscale --format '{% raw %}{{.ImageName}}{% endraw %}'
@@ -35,7 +35,7 @@
     # FULL image reference, used verbatim to roll back (see the rescue below) so
     # a revert is correct whether headscale is tag-pinned (repo:tag) or ever
     # digest-pinned (repo@sha256:...). Re-deriving a bare tag by regex would strip
-    # a digest to naked hex and render an invalid Image=. See plan 26 (finding 2).
+    # a digest to naked hex and render an invalid Image=.
     headscale_prior_image_ref: >-
       {{ (headscale_running_image.stdout | trim)
          if (headscale_running_image.rc == 0
@@ -82,7 +82,7 @@
 # this deploy instead of racing it (a version-bump's slow image pull can exceed
 # the watchdog's confirm window). `always` releases it even if verify FAILS —
 # otherwise a failed deploy would suppress the watchdog for the lock's max-age
-# exactly when headscale is down and the watchdog is needed most. See plan 26.
+# exactly when headscale is down and the watchdog is needed most.
 - name: Restart + verify with the watchdog suppressed
   tags: [headscale, install, configure, verify]
   block:
@@ -106,7 +106,7 @@
       # read a forward-migrated DB, THIS consistent hot snapshot (sqlite .backup,
       # taken while the PRIOR version is still running) is the operator's restore
       # point — surfaced in the rollback-failed message below. Best-effort: never
-      # block a deploy on a snapshot hiccup. See plan 26 (review B2).
+      # block a deploy on a snapshot hiccup.
       when: headscale_quadlet_render is defined and headscale_quadlet_render.changed
       changed_when: false
       failed_when: false
@@ -153,7 +153,7 @@
   # auto-roll-back to the prior known-good image tag so a bad version bump does
   # not leave headscale — the operator's remote-access lifeline — down. Then fail
   # loudly so the operator knows the intended upgrade did not stick. Only runs on
-  # failure, so a healthy deploy is untouched. See plan 26 (D6).
+  # failure, so a healthy deploy is untouched.
   rescue:
     - name: Rollback — no known-good prior image to fall back to
       when: >-
@@ -171,7 +171,7 @@
         # A SEPARATE var (not headscale_version) so the revert still works when the
         # operator supplied the target via -e: extra-vars outrank set_fact, so
         # reassigning headscale_version here would silently no-op. The template
-        # prefers headscale_rollback_image when defined. See plan 26 (D6 + finding 2).
+        # prefers headscale_rollback_image when defined.
         headscale_rollback_image: "{{ headscale_prior_image_ref }}"
 
     - name: Rollback — re-render the Quadlet at the prior version
@@ -204,7 +204,7 @@
       # so the retry loop never runs and the outcome below fires on a single
       # premature probe (false "still DOWN" ~20s before the prior image is serving).
       # ignore_errors lets the retries actually run, then still reach the outcome
-      # message if they exhaust. See plan 26 (review S1).
+      # message if they exhaust.
       ignore_errors: true
 
     - name: Rollback — fail loudly with the outcome
@@ -240,7 +240,7 @@
 # Watchdog install runs LAST — AFTER headscale is restarted + verified up — so the
 # timer (OnBootSec is already elapsed on a warm host, so it fires as soon as it is
 # started) never probes a not-yet-existing headscale mid-deploy and raises a false
-# "DOWN" alert + burns a repair slot on a fresh install. See plan 26 (review S4).
+# "DOWN" alert + burns a repair slot on a fresh install.
 - name: Deploy self-healing reachability watchdog
   ansible.builtin.import_tasks: watchdog.yml
   tags: [headscale, watchdog]

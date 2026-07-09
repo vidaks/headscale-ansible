@@ -1,5 +1,5 @@
 # Headscale reachability watchdog — deterministic on-host self-heal.
-# Managed by Ansible (headscale role). See plexarr plan 26.
+# Managed by Ansible (headscale role).
 [Unit]
 Description=Headscale reachability watchdog (deterministic self-heal)
 After=network-online.target headscale.service
@@ -15,7 +15,7 @@ ExecStart=/usr/local/bin/headscale-watchdog.sh
 # oneshot block every future timer fire — a silently-dead watchdog is the worst
 # outcome for a lockout tool. 360s clears the legitimate worst case (confirm
 # probes + a full three-rung ladder with two 90s bounded restarts ≈ 275s) with
-# headroom, so a real repair is never killed mid-restart. See plan 26 (finding 7).
+# headroom, so a real repair is never killed mid-restart.
 TimeoutStartSec=360
 # The script handles its own alerting and exits 0 on every handled path, so a
 # non-zero exit here means the script itself crashed — surface it in the journal.

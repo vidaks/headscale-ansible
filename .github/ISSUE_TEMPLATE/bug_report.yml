@@ -1,0 +1,44 @@
+name: Bug report
+description: Something went wrong while applying or running the role.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not paste pre-auth keys, vault contents, real
+        domains, or public IPs.** For security issues, use a private advisory
+        instead (see the link above).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command + output
+      description: The exact playbook invocation and the failing task's output (redact site specifics).
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: headscale-version
+    attributes:
+      label: Headscale version
+      placeholder: "0.29.2"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Fedora release + ansible-core version.
+      placeholder: "Fedora 43, ansible-core 2.18"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?

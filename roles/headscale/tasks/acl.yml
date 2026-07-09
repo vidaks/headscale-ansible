@@ -8,5 +8,5 @@
     group: "65532"
     mode: "0600"
   # No notify — see config.yml. The restart is an explicit rescuable task gated on
-  # this register. See plan 26 (finding: fail-to-start not rescued via handler).
+  # this register.
   register: headscale_acl_render

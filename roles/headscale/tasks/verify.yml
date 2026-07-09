@@ -28,8 +28,7 @@
   # Retry: a Quadlet start job completes at conmon-start, NOT app-ready — headscale
   # may still be running its startup DB migration or a Traefik blip may be in
   # flight. Without this, a single-shot probe converts a transient into a spurious
-  # verify failure → a needless (and on a version bump, dangerous) rollback. See
-  # plan 26 (review B2).
+  # verify failure → a needless (and on a version bump, dangerous) rollback.
   until: headscale_health is succeeded
   retries: 12
   delay: 5
@@ -58,7 +57,7 @@
     timeout: 15
   register: headscale_ext_health
   # Same rationale as the local probe above — tolerate app-not-ready-yet lag so a
-  # transient doesn't spuriously trip the rollback. See plan 26 (review B2).
+  # transient doesn't spuriously trip the rollback.
   until: headscale_ext_health is succeeded
   retries: 12
   delay: 5

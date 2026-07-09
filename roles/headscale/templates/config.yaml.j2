@@ -51,11 +51,11 @@ policy:
 
 dns:
   magic_dns: {{ headscale_magic_dns | lower }}
-  # Push DNS to clients that accept it (--accept-dns=true). tux itself runs
-  # tailscale with --accept-dns=false (per its role default), so this push
-  # affects only laptop/mobile peers — they need a working resolver
-  # regardless of which network they're on (especially hotel WiFi where the
-  # local resolver is unreachable through the exit node).
+  # Push DNS to clients that accept it (--accept-dns=true). Nodes running
+  # --accept-dns=false (e.g. servers) are untouched, so this push affects
+  # only laptop/mobile peers — they need a working resolver regardless of
+  # which network they're on (especially hotel WiFi where the local
+  # resolver is unreachable through the exit node).
   override_local_dns: true
   base_domain: {{ headscale_dns_magic_domain | mandatory }}
   nameservers:
@@ -65,11 +65,11 @@ dns:
 {% endfor %}
   search_domains: []
 {% if headscale_dns_extra_records | length > 0 %}
-  # Split DNS for internal-only plexarr routes: tailnet clients resolve these
-  # hostnames to this host's tailnet IP and reach Traefik through the tunnel,
-  # while the WAN path 403s at Traefik's internal-only ipAllowList. Pushed
-  # only to peers that accept DNS (tux itself runs --accept-dns=false, so the
-  # host's own resolution is untouched).
+  # Split DNS for internal-only reverse-proxy routes: tailnet clients resolve
+  # these hostnames to this host's tailnet IP and reach the proxy through the
+  # tunnel, while the WAN path is denied by the proxy's internal-only
+  # allowlist. Pushed only to peers that accept DNS (nodes running
+  # --accept-dns=false keep their own resolution untouched).
   extra_records:
 {% for rec in headscale_dns_extra_records %}
     - name: "{{ rec.name }}"

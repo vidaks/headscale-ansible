@@ -123,8 +123,8 @@
 
 # The add tasks above are add-only: de-listing a subnet from
 # headscale_trusted_proxy_networks left its RETURN exception live forever
-# (found 2026-07-04 when 10.91 was de-listed after plexarr made its proxy
-# networks routeless). Reconcile: enumerate the live priority-9 RETURN
+# (found 2026-07-04 when a de-listed subnet's stale exception outlived its
+# entry). Reconcile: enumerate the live priority-9 RETURN
 # exceptions for THIS daddr:dport (the -d filter keeps rules owned by any
 # other deployment out of the sweep) and remove any whose source is no
 # longer listed. Steady state (nothing to remove) is an empty loop →

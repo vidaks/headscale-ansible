@@ -32,7 +32,8 @@
       - headscale_traefik_dir_stat.stat.isdir
     fail_msg: >-
       Traefik dynamic config directory '{{ headscale_traefik_dynamic_dir }}' does not exist.
-      Run the plexarr reverse-proxy role first to migrate Traefik to directory provider mode.
+      Configure Traefik with a directory-based file provider (a watched dynamic-config
+      directory) before applying this role.
 
 - name: Preflight — assert host IP is configured on a local interface
   ansible.builtin.command: ip -json addr show

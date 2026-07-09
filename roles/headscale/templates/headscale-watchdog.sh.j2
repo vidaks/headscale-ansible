@@ -1,7 +1,6 @@
 #!/bin/bash
 # headscale-watchdog.sh — autonomous on-host self-heal for headscale reachability.
 # Deployed by Ansible (headscale role), triggered by headscale-watchdog.timer.
-# See plexarr plan 26.
 #
 # WHY THIS EXISTS: SSH to this host is tailnet-only (trusted firewalld zone =
 # tailscale0 + LAN); the tailnet needs headscale. If an upgrade/restart breaks
@@ -47,7 +46,7 @@ log() { logger -t headscale-watchdog -- "$*"; echo "[headscale-watchdog] $*" >&2
 # wedge this oneshot — a wedged run blocks the next timer fire, so the watchdog
 # would silently die exactly when it's needed. TimeoutStartSec in the .service is
 # the universal backstop; these fast-fail so RECOVERY can proceed instead of
-# waiting the whole start-timeout out. See plan 26 (review finding 7).
+# waiting the whole start-timeout out.
 PODMAN()  { timeout 15 podman "$@"; }
 NSENTER() { timeout 10 nsenter "$@"; }
 
@@ -67,7 +66,7 @@ probe_external() {
 # also transport-fails → repair) from "ISP down" (local still 200 → alert only) —
 # the two are indistinguishable to the external probe alone, and the old WAN-excuse
 # would have suppressed rung 1 in the netavark-wipe family. Returns 0 on HTTP
-# 2xx/3xx. See plan 26 (review finding B1).
+# 2xx/3xx.
 probe_local_ok() {
     curl -fsS -o /dev/null --max-time "$PROBE_TIMEOUT" \
         --resolve "${PROBE_FQDN}:443:${SERVER_IP}" "https://${PROBE_FQDN}/health" >/dev/null 2>&1
@@ -90,7 +89,7 @@ is_tls_error() {
 # That HTTP error PROVES Traefik answered, so the fault is BEHIND the proxy (our
 # routing / dropped-netavark layer) and MUST run the fix ladder. Excusing a 502
 # as "WAN" was the hole that would leave us locked out in the exact netavark-drop
-# scenario rung 1 (network-reload) repairs. See plan 26 (review finding 1).
+# scenario rung 1 (network-reload) repairs.
 is_transport_error() {
     case "$1" in
         6|7|28) return 0 ;;
@@ -155,7 +154,7 @@ deploy_active() {
 # backoff would never engage and the ladder could thrash. So validate-or-reset on
 # every write and verify the write actually landed. RESET, never abort: a broken
 # counter must not DISABLE recovery — losing some backoff history is safe, losing
-# the ability to restart headscale when locked out is not. See plan 26 (finding 5).
+# the ability to restart headscale when locked out is not.
 state_valid() { jq -e . "$STATE_FILE" >/dev/null 2>&1; }
 ensure_state() {
     mkdir -p "$STATE_DIR"
@@ -204,7 +203,7 @@ repair_allowed() {
 # outage must not push an email/ntfy every 2 minutes — alert fatigue is fatal for a
 # lockout tool, and queued mail floods on recovery. Recovery alerts (✅) always
 # push; a repeating outage CLASS (subject minus its "— host" suffix) pushes at most
-# once per ALERT_DEDUP_WINDOW. State lives in the existing state.json. See plan 26 (S9).
+# once per ALERT_DEDUP_WINDOW. State lives in the existing state.json.
 alert_throttled() {
     local cls="$1" now last
     now=$(date +%s)
@@ -236,7 +235,7 @@ alert() {
 # systemd REJECTS every restart ("start request repeated too quickly") until
 # reset-failed — otherwise the watchdog's restart rungs can never recover a unit
 # whose original fault has since cleared (e.g. a boot-order transient where /mnt
-# mounted late). Bounded so a wedged restart can't hang the oneshot. See plan 26 (S2).
+# mounted late). Bounded so a wedged restart can't hang the oneshot.
 svc_restart() {
     local unit="$1"
     systemctl reset-failed "$unit" 2>/dev/null || true
@@ -252,7 +251,7 @@ try_step() {
     # A deploy that just grabbed the lock now OWNS headscale — stand down cleanly
     # and COMPLETELY (exit 0, not `return 2`). Returning 2 read as false by the
     # caller, which would fall through the whole ladder to a bogus "repairs
-    # exhausted" DOWN alert while STEPS_TAKEN stayed empty. See plan 26 (finding 4).
+    # exhausted" DOWN alert while STEPS_TAKEN stayed empty.
     if deploy_active; then log "deploy in progress — standing down at '$name'"; exit 0; fi
     log "repair: $name"
     STEPS_TAKEN="${STEPS_TAKEN}${STEPS_TAKEN:+, }$name"
@@ -264,7 +263,7 @@ try_step() {
 run_ladder() {
     # Re-check for a deploy BEFORE record_repair so the common "a deploy started
     # between main()'s check and here" race neither burns a backoff slot nor ends
-    # in a false DOWN alert — just defer, the deploy owns it. See plan 26 (finding 4).
+    # in a false DOWN alert — just defer, the deploy owns it.
     if deploy_active; then log "deploy in progress — deferring fix ladder"; exit 0; fi
     record_repair
     # Rung 1: re-add netavark rules a firewalld reload may have dropped. Scoped
@@ -273,8 +272,8 @@ run_ladder() {
     if try_step "network-reload ($RELOAD_CTRS)" PODMAN network reload $RELOAD_CTRS; then
         alert "✅ headscale recovered — ${HOSTNAME_S}" "External health restored after: ${STEPS_TAKEN}."; return 0
     fi
-    # Rung 2: restart Traefik (brief all-services blip). Safe ONLY with the
-    # LOCAL crowdsec plugin (plan 26 A3) — a remote plugin would re-fetch from
+    # Rung 2: restart Traefik (brief all-services blip). Safe ONLY when Traefik's
+    # plugins are LOCAL (vendored) — a remote plugin would re-fetch from
     # plugins.traefik.io mid-outage and 404 everything. Gated by a flag. Bounded
     # so a wedged restart can't hang the oneshot past the next timer fire.
     if [[ "$TRAEFIK_RESTART_ENABLED" == "1" ]]; then
@@ -339,7 +338,6 @@ main() {
     # answered, so the fault is OUR layer — fall through to the ladder (rung 1 =
     # network-reload re-adds dropped netavark rules) instead of blaming the WAN.
     # This is the netavark-drop lockout hole the old unconditional check left open.
-    # See plan 26 (review finding 1).
     if is_transport_error "$LAST_CODE" && traefik_up && egress_trusted; then
         # Differential probe: a LOCALLY-originated request to Traefik's own entrypoint
         # traverses netavark's OUTPUT DNAT. If it ALSO transport-fails, the
@@ -348,7 +346,7 @@ main() {
         # instead of blaming the WAN. Only excuse as WAN when the local probe still
         # returns 200: the box is serving, so the fault is genuinely upstream and no
         # restart can fix it. Without this, the most common local failure family was
-        # misfiled as ISP and left unrepaired. See plan 26 (review finding B1).
+        # misfiled as ISP and left unrepaired.
         if probe_local_ok; then
             alert "⚠️ headscale unreachable — likely WAN/ISP — ${HOSTNAME_S}" \
                 "External ${EXTERNAL_URL} down (curl ${LAST_CODE} — transport/connect failure, no HTTP response) but headscale healthy, Traefik healthy, egress to ${SERVER_IP} via the trusted bridge (${TRUSTED_GW}), AND a local probe of Traefik's entrypoint still returns 200. The box is serving; the fault is upstream (uplink/DNS/router) — NOT restarting anything (a restart can't fix an ISP outage)."

@@ -4,7 +4,7 @@
 # register), NOT a handler flushed here: a handler restart that fails to start the
 # container aborts during flush_handlers, which the rollback rescue does NOT catch
 # — so a fail-to-start upgrade would strand headscale on the bad image with no
-# auto-rollback. See plan 26 (finding: fail-to-start not rescued).
+# auto-rollback.
 - name: Quadlet — deploy headscale container unit
   become: true
   ansible.builtin.template:

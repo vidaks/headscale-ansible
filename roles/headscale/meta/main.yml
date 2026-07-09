@@ -1,7 +1,7 @@
 ---
 galaxy_info:
   role_name: headscale
-  author: homelab
+  author: vidaks
   description: >-
     Deploy and configure Headscale (self-hosted Tailscale coordination server)
     as a rootful Podman Quadlet container on Fedora, behind an existing Traefik

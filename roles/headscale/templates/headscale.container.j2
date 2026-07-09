@@ -15,7 +15,7 @@ StartLimitBurst=10
    reference (captured verbatim from `podman inspect`), so a revert is correct
    whether headscale is tag-pinned or ever digest-pinned (repo@sha256:...). Jinja
    comment (not `#`) so the rendered unit is unchanged and this doesn't churn a
-   restart. See plan 26 (finding 2). #}
+   restart. #}
 Image={{ headscale_rollback_image | default(headscale_image ~ ':' ~ headscale_version, true) }}
 ContainerName=headscale
 Exec=serve
