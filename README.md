@@ -239,6 +239,7 @@ The tables below cover the ones most deployments touch.
 | `headscale_watchdog_enabled` | `true` | Deploy and start the self-healing watchdog timer |
 | `headscale_watchdog_traefik_restart_enabled` | `false` | Watchdog may restart Traefik. Enable only if Traefik's plugins are local (vendored) |
 | `headscale_watchdog_notify_bin` | `""` | Optional push-notification helper for watchdog alerts. Empty = journal + email only |
+| `headscale_watchdog_settle_headscale` | `60` | Seconds the watchdog probes for health after it restarts headscale, before it calls the rung failed. Matches `verify.yml`'s tolerance. See also `_settle_reload` (15), `_settle_traefik` (30), `_settle_gap` (5) |
 | `headscale_container_uid` / `_gid` | `65532` | Distroless `nonroot` UID/GID — single source of truth for dirs, files, and the Quadlet `User=` |
 
 ## Health-gated deploys and rollback
@@ -272,7 +273,10 @@ precisely for when the network is broken.
   filed as WAN outages — alert only, nothing restarted.
 - **Repair ladder**: reload the two containers' netavark firewall rules (the
   firewalld-reload footgun), optionally restart Traefik (off by default), then
-  restart headscale. Each rung re-probes; the ladder stops at first recovery.
+  restart headscale. After each rung the watchdog probes until health returns or
+  that rung's settle budget expires (`headscale_watchdog_settle_*`). A Quadlet
+  unit reports started before the app is ready. One probe would therefore fail a
+  restart that is still succeeding. The ladder stops at first recovery.
 - **Anti-thrash**: at most 3 repairs per rolling hour, then one attempt per
   15 minutes. Repeated outage alerts are deduplicated per class; recovery alerts
   always push.

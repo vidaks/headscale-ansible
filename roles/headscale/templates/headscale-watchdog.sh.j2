@@ -25,6 +25,10 @@ TRAEFIK_RESTART_ENABLED="{{ headscale_watchdog_traefik_restart_enabled | ternary
 CONFIRM_PROBES={{ headscale_watchdog_confirm_probes }}
 CONFIRM_GAP={{ headscale_watchdog_confirm_gap }}
 PROBE_TIMEOUT={{ headscale_watchdog_probe_timeout }}
+SETTLE_GAP={{ headscale_watchdog_settle_gap }}
+SETTLE_RELOAD={{ headscale_watchdog_settle_reload }}
+SETTLE_TRAEFIK={{ headscale_watchdog_settle_traefik }}
+SETTLE_HEADSCALE={{ headscale_watchdog_settle_headscale }}
 REPAIR_CAP={{ headscale_watchdog_repair_cap }}
 REPAIR_WINDOW={{ headscale_watchdog_repair_window }}
 BACKOFF_INTERVAL={{ headscale_watchdog_backoff_interval }}
@@ -116,6 +120,19 @@ headscale_up() {
     # IP-independent: container running AND its own healthcheck passes. Do NOT
     # probe the hardcoded LAN IP (a DHCP change would false-positive).
     PODMAN ps --filter "name=^${HEADSCALE_CTR}$" --filter status=running -q | grep -q . || return 1
+    local st
+    st=$(PODMAN inspect --format '{{ "{{" }}.State.Health.Status{{ "}}" }}' "$HEADSCALE_CTR" 2>/dev/null || echo "")
+    # 'starting' = inside HealthStartPeriod (30s); treat as up so Layer A does not
+    # restart a container that is still coming up — the same grace traefik_up
+    # already gives the proxy. A crash-loop still reaches Layer A: HealthOnFailure=stop
+    # stops the container once the check fails past the start period, and the
+    # status query above never runs on a stopped container.
+    case "$st" in
+        healthy|starting) return 0 ;;
+        unhealthy)        return 1 ;;
+    esac
+    # Empty status — no healthcheck defined, or none has run yet. Run it on demand
+    # (`podman healthcheck run` reports 0/1 only; it has no 'starting' notion).
     PODMAN healthcheck run "$HEADSCALE_CTR" >/dev/null 2>&1
 }
 
@@ -243,11 +260,37 @@ svc_restart() {
 }
 
 # ── Fix ladder ───────────────────────────────────────────────────────
+# Probe external health until it returns or the settle budget expires. A repair
+# step that restarts a service cannot be judged by one probe: a Quadlet unit
+# reports started at conmon-start, not app-ready, which is why verify.yml waits
+# retries: 12 / delay: 5 for the same signal. A single probe at 5s ends the rung
+# on a restart that is still succeeding, and the next timer fire then restarts an
+# already-recovering container (observed 2026-07-23).
+# Deadline-based: one probe may overrun the budget by at most PROBE_TIMEOUT, so
+# the worst case stays computable for TimeoutStartSec.
+settle_probe() {
+    local budget="$1" deadline
+    deadline=$(( $(date +%s) + budget ))
+    while :; do
+        [[ "$(probe_external)" == "0" ]] && return 0
+        # Re-check the deploy sentinel on every iteration, not just once before
+        # the action: a settle budget is long enough for a deploy to start inside
+        # it, and that deploy now OWNS headscale. Stand down completely (exit 0),
+        # the same contract try_step uses. The Layer A path has no later rung to
+        # catch the lock, so without this a deploy that starts mid-settle ends in
+        # a false "headscale DOWN" alert.
+        if deploy_active; then log "deploy in progress — standing down mid-settle"; exit 0; fi
+        (( $(date +%s) + SETTLE_GAP >= deadline )) && return 1
+        sleep "$SETTLE_GAP"
+    done
+}
+
 # Each rung: bail if a deploy grabbed the lock (TOCTOU close), run the action,
-# give it a moment, re-probe external. Return 0 the instant external recovers.
+# then probe until its settle budget expires. Return 0 the instant external
+# recovers.
 STEPS_TAKEN=""
 try_step() {
-    local name="$1"; shift
+    local name="$1" budget="$2"; shift 2
     # A deploy that just grabbed the lock now OWNS headscale — stand down cleanly
     # and COMPLETELY (exit 0, not `return 2`). Returning 2 read as false by the
     # caller, which would fall through the whole ladder to a bogus "repairs
@@ -256,8 +299,7 @@ try_step() {
     log "repair: $name"
     STEPS_TAKEN="${STEPS_TAKEN}${STEPS_TAKEN:+, }$name"
     "$@" >/dev/null 2>&1 || log "  (step '$name' returned non-zero)"
-    sleep 5
-    [[ "$(probe_external)" == "0" ]]
+    settle_probe "$budget"
 }
 
 run_ladder() {
@@ -269,7 +311,7 @@ run_ladder() {
     # Rung 1: re-add netavark rules a firewalld reload may have dropped. Scoped
     # to the two affected containers, never --all (would flap all containers).
     # shellcheck disable=SC2086
-    if try_step "network-reload ($RELOAD_CTRS)" PODMAN network reload $RELOAD_CTRS; then
+    if try_step "network-reload ($RELOAD_CTRS)" "$SETTLE_RELOAD" PODMAN network reload $RELOAD_CTRS; then
         alert "✅ headscale recovered — ${HOSTNAME_S}" "External health restored after: ${STEPS_TAKEN}."; return 0
     fi
     # Rung 2: restart Traefik (brief all-services blip). Safe ONLY when Traefik's
@@ -277,14 +319,14 @@ run_ladder() {
     # plugins.traefik.io mid-outage and 404 everything. Gated by a flag. Bounded
     # so a wedged restart can't hang the oneshot past the next timer fire.
     if [[ "$TRAEFIK_RESTART_ENABLED" == "1" ]]; then
-        if try_step "restart-traefik" svc_restart "${TRAEFIK_CTR}.service"; then
+        if try_step "restart-traefik" "$SETTLE_TRAEFIK" svc_restart "${TRAEFIK_CTR}.service"; then
             alert "✅ headscale recovered — ${HOSTNAME_S}" "External health restored after: ${STEPS_TAKEN}."; return 0
         fi
     else
         log "traefik-restart rung DISABLED (headscale_watchdog_traefik_restart_enabled=false)"
     fi
     # Rung 3: full cycle.
-    if try_step "restart-headscale" timeout 90 systemctl restart "${HEADSCALE_CTR}.service"; then
+    if try_step "restart-headscale" "$SETTLE_HEADSCALE" timeout 90 systemctl restart "${HEADSCALE_CTR}.service"; then
         alert "✅ headscale recovered — ${HOSTNAME_S}" "External health restored after: ${STEPS_TAKEN}."; return 0
     fi
     return 1
@@ -322,7 +364,7 @@ main() {
         # that started since main()'s check owns headscale — don't burn a slot.
         if deploy_active; then log "deploy in progress — deferring headscale restart"; exit 0; fi
         record_repair
-        if try_step "restart-headscale" svc_restart "${HEADSCALE_CTR}.service"; then
+        if try_step "restart-headscale" "$SETTLE_HEADSCALE" svc_restart "${HEADSCALE_CTR}.service"; then
             alert "✅ headscale recovered — ${HOSTNAME_S}" "headscale container restarted; external health restored."
         else
             alert "🚨 headscale DOWN — ${HOSTNAME_S}" \

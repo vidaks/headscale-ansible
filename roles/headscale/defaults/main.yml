@@ -123,6 +123,31 @@ headscale_watchdog_confirm_probes: 2
 headscale_watchdog_confirm_gap: 15
 # curl --max-time per probe.
 headscale_watchdog_probe_timeout: 10
+# Post-repair settle budgets (seconds). After a repair step the watchdog probes
+# external health until it returns or the budget expires, settle_gap apart. A
+# single probe is the hazard verify.yml documents at retries: 12 / delay: 5 — a
+# Quadlet unit reports started at conmon-start, not app-ready, so a one-shot
+# verdict fails a restart that is in fact succeeding, burns a repair slot and
+# pushes a false DOWN alert (observed 2026-07-23: two restarts and two alerts
+# for one incident). Budget per rung, because each rung restarts something
+# different: a netavark reload boots no process, Traefik answers within seconds,
+# headscale needs HealthStartPeriod=30s plus a health interval. The 60s for
+# headscale is verify.yml's 12 x 5s tolerance, deliberately the same number.
+headscale_watchdog_settle_gap: 5
+headscale_watchdog_settle_reload: 15
+headscale_watchdog_settle_traefik: 30
+headscale_watchdog_settle_headscale: 60
+# TimeoutStartSec for the oneshot. Must clear the legitimate worst-case run or
+# systemd kills a repair mid-restart. Worst case, in seconds:
+#   confirm probes      2 x probe_timeout + 1 x confirm_gap        =  35
+#   rung 1 reload       15 (podman timeout) + settle_reload + 10   =  40
+#   rung 2 traefik      90 (svc_restart timeout) + settle_traefik + 10 = 130
+#   rung 3 headscale    90 + settle_headscale + 10                 = 160
+#   alert push          mail 20 + notify 20                        =  40
+#   total                                                          = 405
+# 480 leaves headroom. Raise this whenever a settle budget goes up — a wedged
+# run blocks every later timer fire, so the number is a real trade-off, not slack.
+headscale_watchdog_service_timeout: 480
 # Co-hosted reverse-proxy integration points.
 headscale_watchdog_traefik_container: "traefik"
 # The trusted bridge gateway Traefik SHOULD egress through to reach the

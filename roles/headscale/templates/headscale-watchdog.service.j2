@@ -13,9 +13,10 @@ ExecStart=/usr/local/bin/headscale-watchdog.sh
 # calls with `timeout`, but this catches anything else that could hang (a stuck
 # systemctl job, a kernel-side netns stall): kill the run rather than let a
 # oneshot block every future timer fire — a silently-dead watchdog is the worst
-# outcome for a lockout tool. 360s clears the legitimate worst case (confirm
-# probes + a full three-rung ladder with two 90s bounded restarts ≈ 275s) with
-# headroom, so a real repair is never killed mid-restart.
-TimeoutStartSec=360
+# outcome for a lockout tool. The value must clear the legitimate worst case —
+# confirm probes plus a three-rung ladder with two 90s bounded restarts and each
+# rung's settle budget — or systemd kills a repair mid-restart. The arithmetic
+# lives next to the budgets in defaults/main.yml; change it there.
+TimeoutStartSec={{ headscale_watchdog_service_timeout }}
 # The script handles its own alerting and exits 0 on every handled path, so a
 # non-zero exit here means the script itself crashed — surface it in the journal.
