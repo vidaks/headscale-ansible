@@ -225,7 +225,7 @@ The tables below cover the ones most deployments touch.
 
 | Variable | Default | Description |
 |---|---|---|
-| `headscale_version` | `0.29.2` | Headscale image tag. Patch bumps are safe; minor/major bumps run irreversible DB migrations — read the release notes first |
+| `headscale_version` | `0.29.3` | Headscale image tag. Patch bumps are safe; minor/major bumps run irreversible DB migrations — read the release notes first |
 | `headscale_image` | `ghcr.io/juanfont/headscale` | Container image |
 | `headscale_host_port` | `8080` | Host port the container publishes on `headscale_host_ip` |
 | `headscale_metrics_host_port` | `9091` | Prometheus metrics, published on 127.0.0.1 only (9090 is Cockpit's) |
