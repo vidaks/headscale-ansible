@@ -70,10 +70,14 @@ headscale_ephemeral_node_inactivity_timeout: "30m"
 # the proxy's bridge lease churns across restarts, a pinned /32 adds an
 # IPAM-collision failure mode to the ingress path (proxy fails to start), and a
 # dedicated single-member proxy subnet is a coordinated multi-surface change
-# across two repos, deferred to the co-hosted stack's class-wide firewalld
-# source-restriction work. The exposure is bounded: node auth is TS2021
-# node-key, joining needs an operator-minted pre-auth key. Full reasoning in
-# README "Trusted-network scope".
+# across two repos, gated on the co-hosted stack moving the proxy onto that
+# subnet. NOT gated on firewalld work: this line said so until 2026-08-16 and
+# it was wrong — firewalld cannot gate a published container port at all
+# (`ct status dnat accept` precedes zone dispatch), so that restriction was
+# retired as impossible on 2026-07-25. The mangle rule below is unaffected and
+# narrowing stays an edit to its source match. The exposure is bounded: node
+# auth is TS2021 node-key, joining needs an operator-minted pre-auth key. Full
+# reasoning in README "Trusted-network scope".
 headscale_trusted_network: "10.88.0.0/16"
 
 # Additional source networks permitted to reach the backend port, on top of

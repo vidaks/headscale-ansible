@@ -339,11 +339,12 @@ reasoning:
 - The clean mechanism is a dedicated single-member network for the proxy
   (subnet-as-identity, no pinned address). That is a coordinated change across
   every surface that enumerates the proxy's networks (firewalld trusted
-  sources, IP allowlists, watchdog gateway checks) and belongs to the
-  co-hosted stack's own firewalld work, not to this repo alone. When it lands:
-  add the new subnet to `headscale_trusted_proxy_networks` first (priority-9
-  RETURN, so there is no cutover outage), move the proxy, then flip
-  `headscale_trusted_network` to the new subnet.
+  sources, IP allowlists, watchdog gateway checks), and it is gated on the
+  co-hosted stack moving the proxy onto such a network. This repo cannot do it
+  alone, and nothing here blocks it. When it lands: add the new subnet to
+  `headscale_trusted_proxy_networks` first (priority-9 RETURN, so there is no
+  cutover outage), move the proxy, then flip `headscale_trusted_network` to the
+  new subnet.
 - The exposure is bounded meanwhile: node authentication is TS2021 (Noise,
   node keys), registration requires an operator-minted high-entropy pre-auth
   key, and the metrics port is loopback-only. What a compromised bridge
@@ -352,6 +353,22 @@ reasoning:
   but narrow CVE/DoS surface, and neighbor DoS is not actually prevented by
   narrowing (co-tenants share the host's kernel and can flood the public route
   through the proxy regardless).
+
+**Correction, 2026-08-16.** Until today the bullet above deferred this to "the
+co-hosted stack's own firewalld work". No such work exists and none can:
+firewalld does not gate a published container port at all. Its `filter_INPUT`
+and `filter_FORWARD` chains carry `ct status dnat accept` ahead of the jump to
+zone policies, so a netavark publish is accepted before zone dispatch ever runs,
+and a source restriction built there closes nothing from any source. The
+co-hosted stack measured that on 2026-07-25 and recorded the approach as
+rejected so it would not be proposed a third time.
+
+Nothing about the DROP changes. A mangle PREROUTING rule at priority −140 runs
+ahead of DNAT and is one of the mechanisms that genuinely restricts a published
+port, which is why `firewall.yml` uses it and says so in its own header.
+Narrowing stays a one-line edit to that rule's source match. Only the trigger
+moved: this waits on a decision in the other repo, not on work that will never
+happen here.
 
 ## Removal
 
