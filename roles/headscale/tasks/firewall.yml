@@ -3,8 +3,13 @@
 #
 # Standard firewalld rich rules run post-DNAT (filter priority +10) and cannot
 # match on the original destination port once netavark has rewritten it (DNAT
-# priority -100). The only effective hook is mangle PREROUTING (priority -140),
-# which runs before DNAT and can match on the original daddr:dport.
+# priority -100). The only effective hook is mangle PREROUTING, nft `priority
+# mangle` == -150, which runs before DNAT and can match on the original
+# daddr:dport. Verify with `nft list table ip mangle`: the DROP carries the live
+# counter there. Do not read -140 for this rule (what this comment said until
+# 2026-08-16) — that is `mangle + 10`, a chain inside `table inet firewalld`
+# holding no rule of ours. The exact number matters only when ordering another
+# rule against this one, which is why it is stated rather than approximated.
 #
 # The rule drops traffic from any source outside headscale_trusted_network
 # (the container bridge) to headscale_host_ip:headscale_host_port, preventing
