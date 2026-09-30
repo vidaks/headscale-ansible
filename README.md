@@ -269,8 +269,11 @@ classifier + repair ladder. No network dependencies, no API calls — it exists
 precisely for when the network is broken.
 
 - **Classify first.** TLS failures alert and stop (a restart cannot fix a cert).
-  Transport failures with a healthy proxy and a locally serving entrypoint are
-  filed as WAN outages — alert only, nothing restarted.
+  A host that has lost `headscale_host_ip` or its IPv4 default route (a DHCP
+  lease or link loss) alerts and stops, because no container restart can put a
+  host address back; the next fire re-evaluates. Transport failures with a
+  healthy proxy and a locally serving entrypoint are filed as WAN outages —
+  alert only, nothing restarted.
 - **Repair ladder**: reload the two containers' netavark firewall rules (the
   firewalld-reload footgun), optionally restart Traefik (off by default), then
   restart headscale. After each rung the watchdog probes until health returns or

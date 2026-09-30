@@ -71,9 +71,12 @@ probe_external() {
 # the two are indistinguishable to the external probe alone, and the old WAN-excuse
 # would have suppressed rung 1 in the netavark-wipe family. Returns 0 on HTTP
 # 2xx/3xx.
+LOCAL_CODE=0
 probe_local_ok() {
     curl -fsS -o /dev/null --max-time "$PROBE_TIMEOUT" \
         --resolve "${PROBE_FQDN}:443:${SERVER_IP}" "https://${PROBE_FQDN}/health" >/dev/null 2>&1
+    LOCAL_CODE=$?
+    return "$LOCAL_CODE"
 }
 
 # curl SSL/TLS-family exit codes — a cert/handshake failure, NOT routing.
@@ -154,6 +157,27 @@ egress_trusted() {
     [[ -n "$pid" && "$pid" != "0" ]] || return 1
     route=$(NSENTER -t "$pid" -n ip route get "$SERVER_IP" 2>/dev/null | head -1 || echo "")
     [[ "$route" == *"via ${TRUSTED_GW} "* ]]
+}
+
+# Host network guard: does the host still hold SERVER_IP and an IPv4 default
+# route? Both probes assume it. The local probe pins SERVER_IP with --resolve, so
+# when the address itself is gone it transport-fails exactly like a wiped netavark
+# table, and the ladder then SIGKILLs Traefik and crash-loops headscale on
+# "bind: cannot assign requested address". Measured 2026-09-30: a router reboot
+# dropped the DHCP lease for 3 minutes and the ladder ran in the middle of it.
+# No container restart can put a host address back, so the only correct action
+# is to stand down until the next fire. Sets HOST_NET_WHY for the alert.
+HOST_NET_WHY=""
+host_net_ok() {
+    if ! timeout 5 ip -4 -o addr show to "$SERVER_IP" 2>/dev/null | grep -q .; then
+        HOST_NET_WHY="${SERVER_IP} is not assigned to any interface"
+        return 1
+    fi
+    if ! timeout 5 ip -4 route show default 2>/dev/null | grep -q .; then
+        HOST_NET_WHY="no IPv4 default route"
+        return 1
+    fi
+    return 0
 }
 
 # ── Deploy-collision guard ───────────────────────────────────────────
@@ -296,6 +320,9 @@ try_step() {
     # caller, which would fall through the whole ladder to a bogus "repairs
     # exhausted" DOWN alert while STEPS_TAKEN stayed empty.
     if deploy_active; then log "deploy in progress — standing down at '$name'"; exit 0; fi
+    # Same for the host address: a lease lost mid-ladder turns the next rung into
+    # the bind crash-loop the guard in main() exists to prevent.
+    if ! host_net_ok; then log "host network down (${HOST_NET_WHY}) — standing down at '$name'"; exit 0; fi
     log "repair: $name"
     STEPS_TAKEN="${STEPS_TAKEN}${STEPS_TAKEN:+, }$name"
     "$@" >/dev/null 2>&1 || log "  (step '$name' returned non-zero)"
@@ -352,6 +379,16 @@ main() {
         exit 0
     fi
 
+    # Host network guard, ahead of BOTH layers: a headscale restart with no host
+    # address fails on bind and trips StartLimitBurst, and the ladder cannot tell
+    # a missing address from a wiped netavark table. Stand down; the next fire
+    # re-evaluates, and Layer A's svc_restart clears any tripped start-limit then.
+    if ! host_net_ok; then
+        alert "⚠️ headscale unreachable — host network down — ${HOSTNAME_S}" \
+            "External ${EXTERNAL_URL} down (curl ${LAST_CODE}) and the host itself has no usable network: ${HOST_NET_WHY}. A DHCP lease or link loss, not our layer — NOT restarting anything (a container restart cannot assign a host address). The watchdog resumes on its own once the address is back. journalctl -u NetworkManager."
+        exit 0
+    fi
+
     # Layer A: is headscale itself down?
     if ! headscale_up; then
         log "headscale container unhealthy/stopped — restarting it"
@@ -394,7 +431,7 @@ main() {
                 "External ${EXTERNAL_URL} down (curl ${LAST_CODE} — transport/connect failure, no HTTP response) but headscale healthy, Traefik healthy, egress to ${SERVER_IP} via the trusted bridge (${TRUSTED_GW}), AND a local probe of Traefik's entrypoint still returns 200. The box is serving; the fault is upstream (uplink/DNS/router) — NOT restarting anything (a restart can't fix an ISP outage)."
             exit 0
         fi
-        log "external transport-failed AND the local entrypoint probe also failed — published-port/netavark rules look wiped (our layer), running fix ladder"
+        log "external transport-failed (curl ${LAST_CODE}) AND the local entrypoint probe also failed (curl ${LOCAL_CODE}) — published-port/netavark rules look wiped (our layer), running fix ladder"
         # fall through to the ladder below (do NOT exit)
     fi
 

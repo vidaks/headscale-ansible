@@ -148,7 +148,8 @@ headscale_watchdog_settle_headscale: 60
 #   rung 2 traefik      90 (svc_restart timeout) + settle_traefik + 10 = 130
 #   rung 3 headscale    90 + settle_headscale + 10                 = 160
 #   alert push          mail 20 + notify 20                        =  40
-#   total                                                          = 405
+#   host-net guard      2 x 5 (ip, bounded) in main + per rung x 3 =  40
+#   total                                                          = 445
 # 480 leaves headroom. Raise this whenever a settle budget goes up — a wedged
 # run blocks every later timer fire, so the number is a real trade-off, not slack.
 headscale_watchdog_service_timeout: 480
