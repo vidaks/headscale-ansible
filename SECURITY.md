@@ -1,41 +1,22 @@
 # Security Policy
 
-## Supported versions
+## Supported Versions
 
-This is a personal project; only the latest `main` is supported. Fixes land there.
+Only the latest commit on branch `main` receives security updates.
 
-## Reporting a vulnerability
+## Reporting a Vulnerability
 
-Report security issues **privately**, not in a public issue:
+Report security vulnerabilities privately rather than in public issues:
 
-- Use GitHub's **[Report a vulnerability](https://github.com/vidaks/headscale-ansible/security/advisories/new)**
-  (Security → Advisories), or
-- open a minimal public issue asking for a private contact channel — without details.
+- Open a private report through GitHub [Security Advisories](https://github.com/vidaks/headscale-ansible/security/advisories/new).
+- If that channel is unavailable, open an issue requesting private contact instructions without including vulnerability details.
 
-Expect a best-effort response. There is no bounty.
+## Security Architecture
 
-## Security model & expectations
+This role deploys a Tailscale coordination server and controls access to its backend.
 
-This role deploys a VPN coordination server. The operator carries real responsibility:
-
-- **Secrets live in `ansible-vault` or gitignored files, never in tracked files.**
-  `group_vars/all/vault.yml` is encrypted; `vars.yml`, `inventory.ini`, and
-  `.vault_pass` are gitignored. Keep real domains, IPs, and hostnames in the
-  gitignored vars — tracked files carry placeholders only.
-- **Pre-auth keys are credentials.** `headscale preauthkeys create` prints a
-  secret. Use short expirations, revoke unused keys, and never paste one into
-  an issue.
-- **The container port is firewalled to the container bridge.** The mangle
-  PREROUTING rule drops direct LAN access so all traffic goes through the
-  reverse proxy. Read "Trusted-network scope" in the README before widening
-  `headscale_trusted_network` or adding `headscale_trusted_proxy_networks`.
-- **The watchdog and rollback machinery restart services as root.** Both are
-  deterministic and bounded, but review `templates/headscale-watchdog.sh.j2`
-  before enabling the Traefik-restart rung on a host you did not build.
-- **Version bumps replay irreversible DB migrations.** The upgrade script
-  auto-applies patch releases only; read release notes and snapshot the DB
-  before a minor/major bump.
-
-Reporting a way to reach the headscale API past the firewall rule, extract a
-vaulted value, or abuse the watchdog's root-level repair ladder is especially
-appreciated.
+- Credential Protection: Pre-authenticated keys and tokens are credentials. Assign short expirations, revoke unused keys, and never share keys in issues or logs. Keep secrets encrypted in `group_vars/all/vault.yml`.
+- Git Hygiene: Keep sensitive hostnames, domain names, IP addresses, and vault passwords in gitignored files (`group_vars/`, `inventory.ini`, `.vault_pass`). Tracked repository files contain placeholders only.
+- Network Isolation: The container port is firewalled via nftables mangle PREROUTING rules. Direct access from external networks is dropped before DNAT, requiring all external client traffic to enter via the reverse proxy.
+- Privileged Operations: The self-healing watchdog and rollback mechanisms perform container restarts. Review watchdog scripts and configuration options before enabling optional restart stages.
+- Migration Safeguards: Database migrations run forward-only. Create database backups before applying minor or major updates.

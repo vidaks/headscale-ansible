@@ -1,53 +1,45 @@
 # Contributing
 
-Thanks for your interest. This is a small, personal project maintained on a
-**best-effort** basis — issues and PRs are welcome, but response times vary and not
-every change will fit the scope.
+Contributions are welcome. Please open an issue to discuss non-trivial changes before submitting a pull request.
 
-## Ground rules
+## Guidelines
 
-- **Open an issue first** for anything non-trivial, so we can agree on the approach
-  before you write code.
-- **Idempotency is the contract.** A clean second apply must report `changed=0`.
-  Several tasks are gated or carry `changed_when` for exactly this reason — read the
-  neighboring comment before simplifying one.
-- **Respect the safety posture**: no DNS or default-route side-effects, restrictive
-  defaults, secrets only via vault or gitignored vars, explicit change-gated restarts
-  (no restart handlers — `handlers/main.yml` documents why). PRs that weaken these
-  need to make the case explicitly.
-- **No site-specific values in tracked files.** Real domains, IPs, and hostnames
-  belong in gitignored `group_vars`; tracked files use placeholders
-  (`headscale.example.com`, `192.0.2.10`).
+- All plays must be idempotent. A second apply must report `changed=0`.
+- All tasks must support check mode (`--check`).
+- Respect defensive defaults: restrictive default values, no DNS or default route side effects, and no restart handlers. Restarts must remain explicit and change-gated.
+- Do not commit secrets, private IP addresses, or environment hostnames. Keep local values in gitignored files (`group_vars/`, `inventory.ini`).
 
-## Dev setup
+## Local Development
+
+Clone the repository and install dependencies:
 
 ```bash
 git clone https://github.com/vidaks/headscale-ansible && cd headscale-ansible
 ansible-galaxy collection install -r requirements.yml
-ansible-lint                        # production profile, must pass clean
+ansible-lint
 ansible-playbook site.yml --syntax-check
 ```
 
-Test on a Fedora host with Podman and a Traefik directory provider. The full loop:
+Test on a Fedora host with Podman and Traefik:
 
 ```bash
 ansible-playbook site.yml --check --diff
 ansible-playbook site.yml
 ansible-playbook verify.yml
-ansible-playbook site.yml           # must report changed=0
+ansible-playbook site.yml
 ```
 
-## Style & checks
+The second run must report `changed=0`.
 
-- FQCN module names, named tasks, YAML-mapping arguments, `become` per task.
-- Comments explain *why*, not *what* — match the density already in the files.
-- CI runs `ansible-lint` (production profile) and playbook syntax checks. Both must
-  pass before a PR is reviewed.
+## Code Style
 
-## Reporting bugs & security
+- Use Fully Qualified Collection Names (FQCN) for all modules.
+- Scope `become` to individual tasks rather than entire plays.
+- Comments must explain rationale rather than obvious mechanics.
 
-- Bugs / features: use the issue templates.
-- Security issues: **do not** open a public issue — see [SECURITY.md](SECURITY.md).
+## Reporting Bugs and Security Issues
 
-By contributing, you agree your contributions are licensed under the project's
-[MIT License](LICENSE).
+- For bug reports and feature requests, open a GitHub issue using the provided templates.
+- For security vulnerabilities, do not open a public issue. Follow the instructions in [SECURITY.md](SECURITY.md).
+
+All contributions are subject to the [MIT License](LICENSE).

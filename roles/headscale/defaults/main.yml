@@ -1,195 +1,121 @@
 ---
-# All tunables for the headscale role. Safe, restrictive defaults.
+# Tunables for the headscale role with secure defaults.
 
 headscale_version: "0.29.3"
 headscale_image: "ghcr.io/juanfont/headscale"
 
-# REQUIRED — must be set in group_vars/all/vars.yml (gitignored).
+# Required settings: set in group_vars/all/vars.yml (gitignored).
 headscale_server_url: ""
 headscale_domain: ""
 headscale_dns_magic_domain: ""
 headscale_host_ip: ""
 headscale_traefik_dynamic_dir: ""
 
-# Headscale username that owns operator-managed nodes (the user you create
-# with `headscale users create <name>` and then issue pre-auth keys for).
-# Used by ACL autoApprovers to allow this user's nodes to advertise exit
-# nodes / routes without manual approval. The trailing "@" is the
-# tailscale-policy-v2 syntax for "user, not group/tag" — the role builds it
-# from the bare name. Empty here; set the bare name in group_vars/all/vars.yml.
+# Headscale username that owns operator-managed nodes.
+# Used by ACL autoApprovers so nodes owned by this user can advertise
+# exit nodes or subnets without requiring manual approval.
 headscale_admin_user: ""
 
 # Listen addresses.
 # Bind to 0.0.0.0 so Traefik can reach the container via the host IP.
-# Metrics on localhost only — not exposed publicly.
-# Port 9091 avoids collision with Cockpit (9090).
+# Metrics bind to localhost only (port 9091 avoids collision with Cockpit on 9090).
 headscale_listen_addr: "0.0.0.0:8080"
 headscale_metrics_addr: "0.0.0.0:9091"
 headscale_host_port: 8080
 headscale_metrics_host_port: 9091
 
-# Filesystem paths on the host (outside container).
+# Filesystem paths on the host.
 headscale_config_dir: "/mnt/config/headscale"
 headscale_data_dir: "/mnt/config/headscale/data"
 
-# Database. SQLite is recommended by upstream; PostgreSQL is legacy-only.
+# Database type. Upstream recommends SQLite.
 headscale_db_type: "sqlite"
 
-# Logging.
+# Logging configuration.
 headscale_log_level: "warn"
 headscale_log_format: "json"
 
-# DERP: use Tailscale's public DERP network initially.
-# Embedded DERP adds STUN (3478/udp) and requires public IP config.
+# DERP: uses Tailscale's public DERP servers by default.
 headscale_embedded_derp_enabled: false
 
-# Headscale's built-in ACME is disabled — Traefik owns all TLS.
+# Headscale internal ACME is disabled; Traefik manages TLS termination.
 headscale_acme_hostname: ""
 
-# MagicDNS disabled to preserve system DNS non-interference posture.
+# MagicDNS is disabled by default to avoid altering DNS behavior unexpectedly.
 headscale_magic_dns: false
 
-# DNS resolvers pushed to clients that accept DNS (--accept-dns=true).
-# Cloudflare 1.1.1.1 + 1.0.0.1 by default. Override per-deployment if you
-# prefer a different resolver (Quad9 9.9.9.9, NextDNS, a Pi-hole, etc.).
-# Empty list = push no resolver (clients keep their local DNS).
+# DNS resolvers pushed to clients when accepting DNS (--accept-dns=true).
+# An empty list leaves local client resolvers unchanged.
 headscale_dns_global_nameservers:
   - "1.1.1.1"
   - "1.0.0.1"
 
-# Ephemeral node inactivity timeout. Must be >1m5s per headscale validation.
-# 0s would disable cleanup; 30m is a safe default that still removes gone nodes.
+# Ephemeral node inactivity timeout. Must exceed 1m5s per Headscale requirements.
 headscale_ephemeral_node_inactivity_timeout: "30m"
 
-# Network allowed to reach headscale directly (container bridge).
-# Traffic from any other source is dropped in mangle PREROUTING, before DNAT.
-# Find the bridge subnet with: ip addr show podman0
-#
-# DELIBERATELY subnet-wide (reviewed 2026-07-05, external second opinion taken):
-# this trusts every container on the bridge, not just the reverse proxy — but
-# the proxy's bridge lease churns across restarts, a pinned /32 adds an
-# IPAM-collision failure mode to the ingress path (proxy fails to start), and a
-# dedicated single-member proxy subnet is a coordinated multi-surface change
-# across two repos, gated on the co-hosted stack moving the proxy onto that
-# subnet. NOT gated on firewalld work: this line said so until 2026-08-16 and
-# it was wrong — firewalld cannot gate a published container port at all
-# (`ct status dnat accept` precedes zone dispatch), so that restriction was
-# retired as impossible on 2026-07-25. The mangle rule below is unaffected and
-# narrowing stays an edit to its source match. The exposure is bounded: node
-# auth is TS2021 node-key, joining needs an operator-minted pre-auth key. Full
-# reasoning in README "Trusted-network scope".
+# Subnet allowed to reach Headscale directly (the container bridge).
+# Packets from other sources are dropped in mangle PREROUTING before DNAT.
+# Covers the container bridge subnet (such as 10.88.0.0/16) so dynamic proxy IP leases
+# can reach the backend without static IP collisions.
 headscale_trusted_network: "10.88.0.0/16"
 
-# Additional source networks permitted to reach the backend port, on top of
-# headscale_trusted_network. Each is rendered as a higher-priority RETURN
-# exception in mangle PREROUTING (evaluated before the DROP). Needed when the
-# reverse proxy is multi-homed: with several equal-metric default routes it may
-# egress toward the host from a secondary container network whose source IP
-# falls outside headscale_trusted_network. The DROP would then block it —
-# observed as the proxy returning 504/timeout on the headscale route.
-# Empty by default: a fresh deployment trusts no proxy subnet until it opts in.
+# Additional source networks permitted to access the backend port.
+# Rendered as higher-priority RETURN exceptions in mangle PREROUTING.
+# Useful for multi-homed reverse proxy containers routing from secondary subnets.
 headscale_trusted_proxy_networks: []
 
-# DNS records served by MagicDNS to tailnet peers on top of the magic domain —
-# the split-DNS half of a reverse proxy's internal-only routes (each entry
-# points a public hostname at this host's tailnet IP so tailnet devices reach
-# the proxy through the tunnel; the WAN path is denied at the proxy).
-# {name, value, type?} (type defaults to A). Empty by default: a fresh
-# headscale serves no extra names until the deployment opts in via group_vars.
+# Optional split-DNS records served by MagicDNS to tailnet peers.
+# Each entry is a mapping: {name, value, type?} (type defaults to A).
 headscale_dns_extra_records: []
 
-# ko-app distroless nonroot user. Must match the image's runtime UID/GID.
-# Verified for ghcr.io/juanfont/headscale:0.29.0. Used by dirs.yml ownership
-# and the Quadlet User= directive — single source of truth.
+# Distroless non-root user UID/GID matching the container image runtime user.
 headscale_container_uid: 65532
 headscale_container_gid: 65532
 
-# Optional headscale-ui companion web panel.
+# Optional Headscale-UI companion web interface.
 headscale_ui_enabled: false
 headscale_ui_version: "2026.03.17"
 headscale_ui_image: "ghcr.io/gurucomputing/headscale-ui"
 headscale_ui_domain: ""
 headscale_ui_host_port: 3000
 
-# ── Self-healing watchdog ────────────────────────────────────────────
-# On-host systemd timer that probes headscale reachability and applies a
-# DETERMINISTIC repair when it's down but fixable. This is the operator's
-# remote-lockout insurance: SSH to this host is tailnet-only, the tailnet needs
-# headscale, so if an upgrade/restart breaks headscale while the operator is
-# off-LAN, only an autonomous on-host actor can recover it.
-# No LLM/API — the watchdog must work when the network is down.
+# Self-healing watchdog settings.
+# Runs an on-host systemd timer to probe reachability and repair service failures.
 headscale_watchdog_enabled: true
-# Timer cadence (fast — connectivity is critical). OnBootSec == OnUnitActiveSec.
 headscale_watchdog_interval: "2min"
-# In-run confirm: N probes CONFIRM_GAP seconds apart must all fail before acting
-# (debounces transients + normal in-flight restarts).
 headscale_watchdog_confirm_probes: 2
 headscale_watchdog_confirm_gap: 15
-# curl --max-time per probe.
 headscale_watchdog_probe_timeout: 10
-# Post-repair settle budgets (seconds). After a repair step the watchdog probes
-# external health until it returns or the budget expires, settle_gap apart. A
-# single probe is the hazard verify.yml documents at retries: 12 / delay: 5 — a
-# Quadlet unit reports started at conmon-start, not app-ready, so a one-shot
-# verdict fails a restart that is in fact succeeding, burns a repair slot and
-# pushes a false DOWN alert (observed 2026-07-23: two restarts and two alerts
-# for one incident). Budget per rung, because each rung restarts something
-# different: a netavark reload boots no process, Traefik answers within seconds,
-# headscale needs HealthStartPeriod=30s plus a health interval. The 60s for
-# headscale is verify.yml's 12 x 5s tolerance, deliberately the same number.
+
+# Post-repair settle budgets (in seconds).
+# After a repair action, the watchdog probes external health until it recovers
+# or until the settle budget expires.
 headscale_watchdog_settle_gap: 5
 headscale_watchdog_settle_reload: 15
 headscale_watchdog_settle_traefik: 30
 headscale_watchdog_settle_headscale: 60
-# TimeoutStartSec for the oneshot. Must clear the legitimate worst-case run or
-# systemd kills a repair mid-restart. Worst case, in seconds:
-#   confirm probes      2 x probe_timeout + 1 x confirm_gap        =  35
-#   rung 1 reload       15 (podman timeout) + settle_reload + 10   =  40
-#   rung 2 traefik      90 (svc_restart timeout) + settle_traefik + 10 = 130
-#   rung 3 headscale    90 + settle_headscale + 10                 = 160
-#   alert push          mail 20 + notify 20                        =  40
-#   host-net guard      2 x 5 (ip, bounded) in main + per rung x 3 =  40
-#   total                                                          = 445
-# 480 leaves headroom. Raise this whenever a settle budget goes up — a wedged
-# run blocks every later timer fire, so the number is a real trade-off, not slack.
+
+# Maximum execution timeout for the watchdog oneshot service (in seconds).
 headscale_watchdog_service_timeout: 480
-# Co-hosted reverse-proxy integration points.
+
+# Reverse proxy integration parameters.
 headscale_watchdog_traefik_container: "traefik"
-# The trusted bridge gateway Traefik SHOULD egress through to reach the
-# headscale hairpin (== headscale_trusted_network's gateway). Used to tell
-# "our-layer broken" from "WAN/ISP down".
 headscale_watchdog_trusted_gateway: "10.88.0.1"
-# Containers whose netavark firewall rules get reloaded in the fix ladder
-# (NOT --all — that would flap all ~23 containers).
 headscale_watchdog_reload_containers: "traefik headscale"
-# The Traefik-restart rung. GATED + restrictive default (false): a watchdog Traefik
-# restart is safe ONLY when Traefik loads its plugins locally (vendored), verified
-# to cold-start with plugins.traefik.io blackholed — otherwise a restart during an
-# outage re-fetches remote plugins, fails, and 404s the whole stack. That is a
-# property of a specific co-hosted deployment, NOT of a fresh headscale host, so
-# the default is OFF; opt in via group_vars (mirrors the
-# headscale_trusted_proxy_networks restrictive-default convention).
+
+# Traefik restart toggle. Disabled by default; enable only if the proxy can safely restart offline.
 headscale_watchdog_traefik_restart_enabled: false
-# Anti-thrash: after this many repairs within the rolling window, back off —
-# keep probing + alerting every interval, but only attempt a repair every
-# headscale_watchdog_backoff_interval seconds (don't hammer restarts).
+
+# Anti-thrash rate limiting: maximum repair operations within the rolling window.
 headscale_watchdog_repair_cap: 3
 headscale_watchdog_repair_window: 3600
 headscale_watchdog_backoff_interval: 900
-# Deploy-collision guard: skip FIX actions (still probe+log) when a deploy holds
-# this sentinel and it's fresher than max_age (stale = crashed deploy, ignored).
-# Point it at the sentinel your other deploy tooling touches if the host
-# co-hosts another stack that restarts these services.
+
+# Deploy collision guard: skip automated repairs while a deployment is active.
 headscale_watchdog_deploy_lock: "/run/headscale-deploy.lock"
 headscale_watchdog_deploy_lock_max_age: 1800
-# Alerting. Push (e.g. an ntfy wrapper) is best-effort — needs network; email is
-# the durable record; journal (logger) is the always-local record. The push
-# helper is called as: <bin> --title <subject> --priority high --tags warning
-# <body>. Empty = no push channel (journal + email still fire).
+
+# Alert notifications.
 headscale_watchdog_notify_bin: ""
 headscale_watchdog_alert_email: "{{ headscale_admin_email | default('') }}"
-# Push-channel alert dedup window (seconds): a repeating outage alert class pushes
-# email/ntfy at most once per this interval (journal still records every run), so a
-# multi-hour outage doesn't fire a push every timer tick — alert fatigue is fatal
-# for a lockout tool.
 headscale_watchdog_alert_dedup_window: 3600
